@@ -30,6 +30,23 @@ function sanitizeFileUrl(raw: string): string {
   return raw;
 }
 
+function resolveSamplingPercentage(
+  samplingPercentage: unknown,
+  tracker: any,
+): number {
+  const requestedPercentage = Number(samplingPercentage);
+  if (!Number.isNaN(requestedPercentage) && requestedPercentage > 0) {
+    return requestedPercentage;
+  }
+
+  const taskPercentage = Number(tracker?.qc_percentage);
+  if (!Number.isNaN(taskPercentage) && taskPercentage > 0) {
+    return taskPercentage;
+  }
+
+  return 10;
+}
+
 export const generateCustomSample = async (req: Request, res: Response) => {
   const { tracker_id, sampling_percentage } = req.body;
 
@@ -138,7 +155,7 @@ export const generateCustomSample = async (req: Request, res: Response) => {
       }
     }
 
-    const percentage = Number(sampling_percentage) || 10;
+    const percentage = resolveSamplingPercentage(sampling_percentage, tracker);
     const totalRows = rowIndices.length;
     const sampleSize = Math.ceil(totalRows * (percentage / 100));
 
@@ -286,7 +303,7 @@ export const downloadCustomSample = async (req: Request, res: Response) => {
       }
     }
 
-    const percentage = Number(sampling_percentage) || 10;
+    const percentage = resolveSamplingPercentage(sampling_percentage, tracker);
     const totalRows = rowIndices.length;
     const sampleSize = Math.ceil(totalRows * (percentage / 100));
 
