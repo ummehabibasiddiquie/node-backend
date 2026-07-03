@@ -1,7 +1,11 @@
 import { Request, Response } from "express";
 import { get_db_connection } from "../database/db";
 import { QCWorkflowService } from "../services/qc-workflow.service";
-import { getQCRecordEmailDetails, handleQCStatusTransitions } from "../utils/qc-helpers";
+import {
+  getQCRecordEmailDetails,
+  handleQCStatusTransitions,
+  uploadSampleToCloudinary,
+} from "../utils/qc-helpers";
 import { sendQCEmailInternal } from "../controllers/mail.controller";
 
 /**
@@ -39,6 +43,16 @@ export const saveCorrectionQC = async (req: Request, res: Response) => {
 
     const resolvedGeneratedCount =
       data_generated_count ?? qc_generated_count ?? 0;
+
+    const uploadedQCFilePath =
+      qc_file_records && whole_file_path
+        ? await uploadSampleToCloudinary(
+            qc_file_records,
+            whole_file_path,
+            Number(resolvedGeneratedCount) || 10,
+            "hrms/qc_samples",
+          )
+        : null;
 
     // Validate required fields
     if (!logged_in_user_id || !tracker_id || !qa_user_id || !project_id || !task_id) {
@@ -82,7 +96,7 @@ export const saveCorrectionQC = async (req: Request, res: Response) => {
           file_record_count || 0,
           Number(resolvedGeneratedCount) || 0,
           error_list ? JSON.stringify(error_list) : null,
-          qc_file_path || null,
+          uploadedQCFilePath || qc_file_path || null,
           tracker_id || null,
         ]
       );
@@ -100,7 +114,7 @@ export const saveCorrectionQC = async (req: Request, res: Response) => {
       "correction",
       {
         whole_file_path: whole_file_path || null,
-        qc_file_path: qc_file_path || null,
+        qc_file_path: uploadedQCFilePath || qc_file_path || null,
         error_list: error_list || [],
       },
     );

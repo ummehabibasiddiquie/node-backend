@@ -1,7 +1,11 @@
 import { Request, Response } from "express";
 import { get_db_connection } from "../database/db";
 import { QCWorkflowService } from "../services/qc-workflow.service";
-import { getQCRecordEmailDetails, handleQCStatusTransitions } from "../utils/qc-helpers";
+import {
+  getQCRecordEmailDetails,
+  handleQCStatusTransitions,
+  uploadSampleToCloudinary,
+} from "../utils/qc-helpers";
 import { sendQCEmailInternal } from "../controllers/mail.controller";
 
 /**
@@ -43,6 +47,16 @@ export const saveRegularQC = async (req: Request, res: Response) => {
     const resolvedGeneratedCount =
       data_generated_count ?? qc_generated_count ?? 0;
 
+    const uploadedQCFilePath =
+      qc_file_records && whole_file_path
+        ? await uploadSampleToCloudinary(
+            qc_file_records,
+            whole_file_path,
+            Number(resolvedGeneratedCount) || 10,
+            "hrms/qc_samples",
+          )
+        : null;
+
     // Ensure all values are properly handled (undefined -> null)
     const safeParams = {
       assistant_manager_id: assistant_manager_id || null,
@@ -51,7 +65,7 @@ export const saveRegularQC = async (req: Request, res: Response) => {
       project_id: project_id || null,
       task_id: task_id || null,
       whole_file_path: whole_file_path || null,
-      qc_file_path: qc_file_path || null,
+      qc_file_path: uploadedQCFilePath || qc_file_path || null,
       date_of_file_submission: date_of_file_submission || null,
       qc_score: qc_score || null,
       file_record_count: file_record_count || 0,

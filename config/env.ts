@@ -13,6 +13,8 @@ export const {
   NODE_ENV,
   SERVER_URL,
   PYTHON_URL,
+  PYTHON_URL_1,
+  PYTHON_URL_2,
   JWT_SECRET,
   JWT_EXPIRES_IN,
   SMTP_HOST,
@@ -30,6 +32,12 @@ export const {
   CLOUDINARY_API_KEY,
   CLOUDINARY_API_SECRET,
 } = process.env;
+
+// Support for multiple Python backend URLs with fallback
+export const PYTHON_URLS = [
+  PYTHON_URL_1 || PYTHON_URL,
+  PYTHON_URL_2,
+].filter(Boolean); // Filter out null/undefined values
 
 // Debug log for configuration validation
 if (NODE_ENV === "development" || process.env.DEBUG === "true") {
