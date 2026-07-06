@@ -335,10 +335,11 @@ export const downloadCustomSample = async (req: Request, res: Response) => {
       sampleSheet.addRow(rowData);
     });
 
-    // 6. Stream directly to response
-    const urlPathname = new URL(originalFileUrl).pathname;
-    const baseName = path.basename(urlPathname, ext); // filename without extension
-    const downloadFileName = `${baseName}_${percentage}_percent_sample${ext}`;
+    // 6. Stream directly to response with proper filename
+    const userName = tracker.user_name || "User";
+    const taskName = tracker.task_name || "Task";
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const downloadFileName = `${userName}_${taskName}_${timestamp}_${percentage}_percent_sample${ext}`;
 
     res.setHeader(
       "Content-Type",
