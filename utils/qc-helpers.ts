@@ -18,6 +18,146 @@ export function formatSubmissionDate(date_of_file_submission: any): string {
   return formattedDate;
 }
 
+export function parseQcErrorList(raw: any): any[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+export function qcErrorLabel(error: any): string {
+  if (error == null) return "";
+  if (typeof error !== "object") return String(error);
+  return (
+    error.error ||
+    (error.category && error.subcategory
+      ? `${error.category} - ${error.subcategory}`
+      : "") ||
+    error.name ||
+    error.message ||
+    JSON.stringify(error)
+  );
+}
+
+/**
+ * Adds an Errors column, highlights rows that have QC errors, and
+ * appends the unique error list at the bottom of that column.
+ * `error.row` is 1-based sample-record index (Excel data starts at row 2).
+ */
+export function annotateWorksheetWithQcErrors(
+  sheet: ExcelJS.Worksheet,
+  errorList: any
+): void {
+  const errors = parseQcErrorList(errorList);
+  const header = sheet.getRow(1);
+  let lastCol = 1;
+  let existingErrorCol: number | null = null;
+  header.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+    if (colNumber > lastCol) lastCol = colNumber;
+    const text = String(cell.value || "").trim().toLowerCase();
+    if (text === "errors") existingErrorCol = colNumber;
+  });
+  if (sheet.columnCount > lastCol) lastCol = sheet.columnCount;
+
+  const errorCol = existingErrorCol || lastCol + 1;
+  const headerCell = header.getCell(errorCol);
+  headerCell.value = "Errors";
+  headerCell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  headerCell.fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FFB91C1C" },
+  };
+  headerCell.alignment = { vertical: "middle", wrapText: true };
+  sheet.getColumn(errorCol).width = 48;
+
+  const byRow = new Map<number, string[]>();
+  const uniqueCounts = new Map<string, number>();
+  errors.forEach((err) => {
+    const label = qcErrorLabel(err).trim();
+    if (!label) return;
+    uniqueCounts.set(label, (uniqueCounts.get(label) || 0) + 1);
+    const rowNum = Number(err?.row);
+    if (!Number.isFinite(rowNum) || rowNum < 1) return;
+    const list = byRow.get(rowNum) || [];
+    list.push(label);
+    byRow.set(rowNum, list);
+  });
+
+  let lastDataRow = 1;
+  let hitSummary = false;
+  sheet.eachRow({ includeEmpty: false }, (row) => {
+    if (row.number === 1) return;
+    const val = String(row.getCell(errorCol).value || "").trim().toLowerCase();
+    if (val === "error list") {
+      hitSummary = true;
+      return;
+    }
+    if (hitSummary) return;
+    if (row.number > lastDataRow) lastDataRow = row.number;
+  });
+
+  byRow.forEach((labels, sampleRow) => {
+    const excelRow = sampleRow + 1;
+    const row = sheet.getRow(excelRow);
+    const cell = row.getCell(errorCol);
+    cell.value = labels.join("; ");
+    cell.alignment = { wrapText: true, vertical: "top" };
+    cell.font = { color: { argb: "FF9C0006" }, bold: true };
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFFFC7CE" },
+    };
+    row.eachCell({ includeEmpty: true }, (dataCell, colNumber) => {
+      if (colNumber === errorCol) return;
+      if (!dataCell.fill || dataCell.fill.type !== "pattern") {
+        dataCell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFFFEBEE" },
+        };
+      }
+    });
+    if (excelRow > lastDataRow) lastDataRow = excelRow;
+  });
+
+  let next = lastDataRow + 2;
+  const titleCell = sheet.getRow(next).getCell(errorCol);
+  titleCell.value = "Error List";
+  titleCell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  titleCell.fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FFB91C1C" },
+  };
+  next += 1;
+
+  if (uniqueCounts.size === 0) {
+    sheet.getRow(next).getCell(errorCol).value = "No errors";
+    return;
+  }
+
+  uniqueCounts.forEach((count, name) => {
+    const cell = sheet.getRow(next).getCell(errorCol);
+    cell.value = `${name} (${count})`;
+    cell.font = { color: { argb: "FF9C0006" } };
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFFFF2CC" },
+    };
+    next += 1;
+  });
+}
+
 /**
  * Generates an Excel buffer for sampled QC records and uploads it to Cloudinary.
  */
@@ -25,7 +165,8 @@ export async function uploadSampleToCloudinary(
   qc_file_records: any,
   whole_file_path: string | null,
   percentage: number = 10,
-  folderName: string = "hrms/qc_samples"
+  folderName: string = "hrms/qc_samples",
+  error_list: any = null
 ): Promise<string | null> {
   try {
     const sampleData = typeof qc_file_records === "string" ? JSON.parse(qc_file_records) : qc_file_records;
@@ -40,6 +181,10 @@ export async function uploadSampleToCloudinary(
       sampleData.forEach((record: any) => {
         sampleSheet.addRow(headers.map((h) => record[h]));
       });
+
+      if (error_list) {
+        annotateWorksheetWithQcErrors(sampleSheet, error_list);
+      }
 
       const buffer = (await sampleWorkbook.xlsx.writeBuffer()) as any;
       const fileName =

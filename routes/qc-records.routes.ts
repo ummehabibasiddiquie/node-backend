@@ -3,6 +3,7 @@ import multer from "multer";
 import {
   generateCustomSample,
   downloadCustomSample,
+  downloadAnnotatedQcFile,
   saveQCRecord,
   getQCRecords,
   getQCRecordById,
@@ -19,6 +20,7 @@ const upload = multer({
 
 router.post("/qc-records/generate-sample", generateCustomSample);
 router.get("/qc-records/download-sample/:tracker_id", downloadCustomSample);
+router.get("/qc-records/download-annotated/:id", downloadAnnotatedQcFile);
 router.post("/qc-records/save", saveQCRecord);
 router.get("/qc-records/list", getQCRecords);
 router.get("/qc-records/view/:id", getQCRecordById);

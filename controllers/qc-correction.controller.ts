@@ -51,6 +51,7 @@ export const saveCorrectionQC = async (req: Request, res: Response) => {
             whole_file_path,
             Number(resolvedGeneratedCount) || 10,
             "hrms/qc_samples",
+            error_list
           )
         : null;
 

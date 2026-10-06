@@ -12,6 +12,8 @@ import {
   getQCRecordEmailDetails,
   handleQCStatusTransitions,
   formatSubmissionDate,
+  annotateWorksheetWithQcErrors,
+  parseQcErrorList,
 } from "../utils/qc-helpers";
 import { QCWorkflowService } from "../services/qc-workflow.service";
 import { uploadBufferToCloudinary } from "../utils/cloudinary-utils";
@@ -407,7 +409,8 @@ export const saveQCRecord = async (req: Request, res: Response) => {
         qc_file_records,
         whole_file_path,
         sampling_percentage || 10,
-        folderName
+        folderName,
+        error_list
       );
     }
 
@@ -783,36 +786,41 @@ export const getQCRecords = async (req: Request, res: Response) => {
   const connection = await get_db_connection();
 
   try {
-    // Step 1: Get single records per QA agent per date, then check if that date is audited
+    // One record per QA agent per calendar day, excluding days already in qc_audit.
+    // Derived tables (scanned once) instead of per-row DATE() correlated subqueries.
     let sql = `
-      SELECT 
+      SELECT
         q.*,
-        a.user_name as agent_name,
-        qa.user_name as qa_name,
-        am.user_name as am_name,
+        a.user_name AS agent_name,
+        qa_user.user_name AS qa_name,
+        am.user_name AS am_name,
         p.project_name,
         t.task_name,
-        DATE(q.date_of_file_submission) as record_date
-      FROM qc_records q
+        firsts.record_date
+      FROM (
+        SELECT qa_user_id, DATE(date_of_file_submission) AS record_date, MIN(id) AS id
+        FROM qc_records
+        WHERE qa_user_id IS NOT NULL
+          AND date_of_file_submission IS NOT NULL
+        GROUP BY qa_user_id, DATE(date_of_file_submission)
+      ) firsts
+      INNER JOIN qc_records q ON q.id = firsts.id
+      LEFT JOIN (
+        SELECT DISTINCT
+          audited_q.qa_user_id,
+          DATE(audited_q.date_of_file_submission) AS record_date
+        FROM qc_audit audit_row
+        INNER JOIN qc_records audited_q ON audit_row.qc_record_id = audited_q.id
+        WHERE audited_q.qa_user_id IS NOT NULL
+      ) audited
+        ON audited.qa_user_id = firsts.qa_user_id
+       AND audited.record_date = firsts.record_date
       LEFT JOIN tfs_user a ON q.agent_id = a.user_id
-      LEFT JOIN tfs_user qa ON q.qa_user_id = qa.user_id
+      LEFT JOIN tfs_user qa_user ON q.qa_user_id = qa_user.user_id
       LEFT JOIN tfs_user am ON q.assistant_manager_id = am.user_id
       LEFT JOIN project p ON q.project_id = p.project_id
       LEFT JOIN task t ON q.task_id = t.task_id
-      WHERE q.qa_user_id IS NOT NULL
-        AND q.id = (
-          SELECT MIN(q2.id) 
-          FROM qc_records q2 
-          WHERE q2.qa_user_id = q.qa_user_id 
-            AND DATE(q2.date_of_file_submission) = DATE(q.date_of_file_submission)
-        )
-        AND NOT EXISTS (
-          SELECT 1 
-          FROM qc_audit qa
-          INNER JOIN qc_records audited_q ON qa.qc_record_id = audited_q.id
-          WHERE audited_q.qa_user_id = q.qa_user_id 
-            AND DATE(audited_q.date_of_file_submission) = DATE(q.date_of_file_submission)
-        )
+      WHERE audited.qa_user_id IS NULL
     `;
 
     const queryParams: any[] = [];
@@ -822,20 +830,13 @@ export const getQCRecords = async (req: Request, res: Response) => {
       queryParams.push(logged_in_user_id);
     }
 
-    const [rows] = await connection.execute(sql, queryParams);
-    
+    sql += ` ORDER BY qa_user.user_name DESC, q.created_at DESC`;
+
+    const [rows] = await connection.query(sql, queryParams);
+
     console.log(`[DEBUG] Total non-audited records found: ${(rows as any[]).length}`);
 
-    // Sort by QA agent name DESC, then by created_at DESC for final output
-    const filteredRecords = (rows as any[]).sort((a: any, b: any) => {
-      // First sort by QA agent name descending
-      const qaNameCompare = (b.qa_name || '').localeCompare(a.qa_name || '');
-      if (qaNameCompare !== 0) {
-        return qaNameCompare;
-      }
-      // Then sort by created_at descending
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-    });
+    const filteredRecords = rows as any[];
     
     // Format dates in the response
     const formattedRows = formatDatesInRows(filteredRecords, ['created_at', 'updated_at', 'date_of_file_submission']);
@@ -907,6 +908,61 @@ export const agentUploadCorrection = async (req: Request, res: Response) => {
     });
   } finally {
     if (connection) await connection.end();
+  }
+};
+
+export const downloadAnnotatedQcFile = async (req: Request, res: Response) => {
+  const { id } = req.params;
+  if (!id) {
+    return res.status(400).json({ success: false, message: "QC record id is required" });
+  }
+
+  const connection = await get_db_connection();
+  try {
+    const [rows]: any = await connection.execute(
+      `SELECT id, qc_file_path, error_list, tracker_id
+       FROM qc_records WHERE id = ? LIMIT 1`,
+      [id]
+    );
+    const record = rows?.[0];
+    if (!record) {
+      return res.status(404).json({ success: false, message: "QC record not found" });
+    }
+    if (!record.qc_file_path) {
+      return res.status(404).json({ success: false, message: "QC file not found for this record" });
+    }
+
+    const fileUrl = sanitizeFileUrl(String(record.qc_file_path));
+    const fileResponse = await axios.get(fileUrl, { responseType: "arraybuffer" });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(fileResponse.data as ArrayBuffer);
+
+    const sheet = workbook.worksheets[0];
+    if (sheet) {
+      annotateWorksheetWithQcErrors(sheet, parseQcErrorList(record.error_list));
+    }
+
+    const downloadFileName = `QC_Errors_Record_${record.id}.xlsx`;
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${downloadFileName}"`
+    );
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    console.error("Error downloading annotated QC file:", error);
+    if (!res.headersSent) {
+      return res.status(500).json({
+        success: false,
+        message: error instanceof Error ? error.message : "Internal server error",
+      });
+    }
+  } finally {
+    await connection.end();
   }
 };
 
