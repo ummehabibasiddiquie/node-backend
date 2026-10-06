@@ -911,6 +911,32 @@ export const agentUploadCorrection = async (req: Request, res: Response) => {
   }
 };
 
+async function loadWorkbookFromUrl(fileUrl: string): Promise<ExcelJS.Workbook> {
+  const fileResponse = await axios.get(fileUrl, {
+    responseType: "arraybuffer",
+    timeout: 60000,
+    maxRedirects: 5,
+    validateStatus: (status) => status >= 200 && status < 400,
+  });
+  const buffer = Buffer.from(fileResponse.data);
+  const workbook = new ExcelJS.Workbook();
+  const pathOnly = fileUrl.split("?")[0].toLowerCase();
+  const tryCsv = async () => {
+    const { Readable } = await import("stream");
+    await workbook.csv.read(Readable.from(buffer));
+  };
+  if (pathOnly.endsWith(".csv")) {
+    await tryCsv();
+    return workbook;
+  }
+  try {
+    await workbook.xlsx.load(buffer);
+  } catch {
+    await tryCsv();
+  }
+  return workbook;
+}
+
 export const downloadAnnotatedQcFile = async (req: Request, res: Response) => {
   const { id } = req.params;
   if (!id) {
@@ -928,19 +954,23 @@ export const downloadAnnotatedQcFile = async (req: Request, res: Response) => {
     if (!record) {
       return res.status(404).json({ success: false, message: "QC record not found" });
     }
-    if (!record.qc_file_path) {
-      return res.status(404).json({ success: false, message: "QC file not found for this record" });
+
+    const errors = parseQcErrorList(record.error_list);
+    let workbook = new ExcelJS.Workbook();
+    let sheet = workbook.addWorksheet("QC Sample");
+
+    if (record.qc_file_path) {
+      try {
+        const fileUrl = sanitizeFileUrl(String(record.qc_file_path));
+        workbook = await loadWorkbookFromUrl(fileUrl);
+        sheet = workbook.worksheets[0] || sheet;
+      } catch (loadErr) {
+        console.error("Annotated download: source file load failed, using error sheet", loadErr);
+        sheet.getRow(1).getCell(1).value = "Agent file could not be loaded. Error list is below.";
+      }
     }
 
-    const fileUrl = sanitizeFileUrl(String(record.qc_file_path));
-    const fileResponse = await axios.get(fileUrl, { responseType: "arraybuffer" });
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(fileResponse.data as ArrayBuffer);
-
-    const sheet = workbook.worksheets[0];
-    if (sheet) {
-      annotateWorksheetWithQcErrors(sheet, parseQcErrorList(record.error_list));
-    }
+    annotateWorksheetWithQcErrors(sheet, errors);
 
     const downloadFileName = `QC_Errors_Record_${record.id}.xlsx`;
     res.setHeader(

@@ -86,9 +86,14 @@ export function annotateWorksheetWithQcErrors(
     uniqueCounts.set(label, (uniqueCounts.get(label) || 0) + 1);
     const rowNum = Number(err?.row);
     if (!Number.isFinite(rowNum) || rowNum < 1) return;
-    const list = byRow.get(rowNum) || [];
-    list.push(label);
-    byRow.set(rowNum, list);
+    // QC form stores 1-based sample index (Excel data starts at row 2).
+    // Some records store the Excel row itself — highlight both.
+    const excelRows = rowNum >= 2 ? [rowNum, rowNum + 1] : [rowNum + 1];
+    excelRows.forEach((excelRow) => {
+      const list = byRow.get(excelRow) || [];
+      if (!list.includes(label)) list.push(label);
+      byRow.set(excelRow, list);
+    });
   });
 
   let lastDataRow = 1;
@@ -104,8 +109,7 @@ export function annotateWorksheetWithQcErrors(
     if (row.number > lastDataRow) lastDataRow = row.number;
   });
 
-  byRow.forEach((labels, sampleRow) => {
-    const excelRow = sampleRow + 1;
+  byRow.forEach((labels, excelRow) => {
     const row = sheet.getRow(excelRow);
     const cell = row.getCell(errorCol);
     cell.value = labels.join("; ");
