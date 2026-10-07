@@ -907,7 +907,7 @@ async function loadWorkbookFromUrl(fileUrl: string): Promise<ExcelJS.Workbook> {
     return workbook;
   }
   try {
-    await workbook.xlsx.load(buffer);
+    await workbook.xlsx.load(buffer as unknown as ArrayBuffer);
   } catch {
     await tryCsv();
   }

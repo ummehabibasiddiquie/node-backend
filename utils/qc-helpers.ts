@@ -86,14 +86,10 @@ export function annotateWorksheetWithQcErrors(
     uniqueCounts.set(label, (uniqueCounts.get(label) || 0) + 1);
     const rowNum = Number(err?.row);
     if (!Number.isFinite(rowNum) || rowNum < 1) return;
-    // QC form stores 1-based sample index (Excel data starts at row 2).
-    // Some records store the Excel row itself — highlight both.
-    const excelRows = rowNum >= 2 ? [rowNum, rowNum + 1] : [rowNum + 1];
-    excelRows.forEach((excelRow) => {
-      const list = byRow.get(excelRow) || [];
-      if (!list.includes(label)) list.push(label);
-      byRow.set(excelRow, list);
-    });
+    // error.row matches the Excel row shown in View Error (header is row 1).
+    const list = byRow.get(rowNum) || [];
+    if (!list.includes(label)) list.push(label);
+    byRow.set(rowNum, list);
   });
 
   let lastDataRow = 1;
