@@ -1,11 +1,29 @@
 import { config } from "dotenv";
+import fs from "fs";
 import path from "path";
 
-// Load .env relative to this file to handle different working directories
-const envPath = path.resolve(__dirname, "..", ".env");
-config({ path: envPath, override: true });
+// Production runs `node dist/index.js` so __dirname is dist/config (not project root).
+// Fill in missing vars from the first .env that exists; do not override PM2/system env.
+const envCandidates = [
+  path.resolve(process.cwd(), ".env"),
+  path.resolve(__dirname, "..", ".env"),
+  path.resolve(__dirname, "..", "..", ".env"),
+];
 
-console.log(`[Config] Attempting to load .env from: ${envPath}`);
+let loadedEnvPath: string | null = null;
+for (const envPath of envCandidates) {
+  if (fs.existsSync(envPath)) {
+    config({ path: envPath, override: false });
+    loadedEnvPath = envPath;
+    break;
+  }
+}
+
+console.log(
+  loadedEnvPath
+    ? `[Config] Loaded .env from: ${loadedEnvPath}`
+    : `[Config] No .env file found (checked: ${envCandidates.join(", ")})`,
+);
 
 
 export const {

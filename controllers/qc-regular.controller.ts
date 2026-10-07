@@ -2,11 +2,10 @@ import { Request, Response } from "express";
 import { get_db_connection } from "../database/db";
 import { QCWorkflowService } from "../services/qc-workflow.service";
 import {
-  getQCRecordEmailDetails,
   handleQCStatusTransitions,
   uploadSampleToCloudinary,
 } from "../utils/qc-helpers";
-import { sendQCEmailInternal } from "../controllers/mail.controller";
+import { dispatchQcCompletionEmail } from "../controllers/mail.controller";
 
 /**
  * Controller for handling Regular QC evaluations
@@ -151,40 +150,19 @@ export const saveRegularQC = async (req: Request, res: Response) => {
 
         await connection.commit();
 
-        // Send Background Email (Async)
-        const emailData = await getQCRecordEmailDetails(
-          connection,
-          safeParams.agent_id,
-          safeParams.project_id,
-          safeParams.task_id,
-          safeParams.qa_user_id,
-        );
-
-        if (emailData) {
-          const submission_time = safeParams.date_of_file_submission
-            ? new Date(safeParams.date_of_file_submission).toLocaleDateString("en-IN", {
-                day: "2-digit",
-                month: "short",
-                year: "numeric",
-              })
-            : "N/A";
-
-          sendQCEmailInternal({
-            agent_email: emailData.agent_email,
-            status: "regular",
-            project_name: emailData.project_name,
-            task_name: emailData.task_name,
-            qc_agent_name: emailData.qa_name,
-            qc_score: safeParams.qc_score,
-            error_count: safeParams.error_list ? JSON.parse(safeParams.error_list).length || 0 : 0,
-            error_list: safeParams.error_list ? JSON.parse(safeParams.error_list) : [],
-            comments: "",
-            file_path: safeParams.qc_file_path,
-            submission_time,
-          }).catch((err: any) =>
-            console.error("[QC Regular] Asynchronous email failed:", err),
-          );
-        }
+        dispatchQcCompletionEmail({
+          agent_id: safeParams.agent_id,
+          project_id: safeParams.project_id,
+          task_id: safeParams.task_id,
+          qa_user_id: safeParams.qa_user_id,
+          tracker_id: safeParams.tracker_id,
+          status: "regular",
+          qc_score: safeParams.qc_score,
+          error_list: safeParams.error_list,
+          comments,
+          file_path: safeParams.qc_file_path,
+          submission_time: safeParams.date_of_file_submission,
+        });
 
         return res.status(200).json({
           success: true,
@@ -251,59 +229,32 @@ export const saveRegularQC = async (req: Request, res: Response) => {
 
         await connection.commit();
 
-        // Send Background Email (Async)
-        const emailData = await getQCRecordEmailDetails(
-          connection,
-          safeParams.agent_id,
-          safeParams.project_id,
-          safeParams.task_id,
-          safeParams.qa_user_id,
+        const [correctionHistoryRows]: any = await connection.execute(
+          "SELECT qc_file_path, created_at FROM qc_correction_history WHERE qc_record_id = ? ORDER BY correction_count DESC LIMIT 1",
+          [existingRows[0].id]
         );
+        const sampleFilePath = correctionHistoryRows.length > 0 ? correctionHistoryRows[0].qc_file_path : safeParams.qc_file_path;
+        const correctionCreatedAt = correctionHistoryRows.length > 0 ? correctionHistoryRows[0].created_at : null;
 
-        if (emailData) {
-          // Fetch QC score and sample file path from correction history
-          const [correctionHistoryRows]: any = await connection.execute(
-            "SELECT qc_file_path, created_at FROM qc_correction_history WHERE qc_record_id = ? ORDER BY correction_count DESC LIMIT 1",
-            [existingRows[0].id]
-          );
-          const sampleFilePath = correctionHistoryRows.length > 0 ? correctionHistoryRows[0].qc_file_path : null;
-          const correctionCreatedAt = correctionHistoryRows.length > 0 ? correctionHistoryRows[0].created_at : null;
+        const [qcRecordRows]: any = await connection.execute(
+          "SELECT qc_score FROM qc_records WHERE id = ?",
+          [existingRows[0].id]
+        );
+        const qcScore = qcRecordRows.length > 0 ? qcRecordRows[0].qc_score : safeParams.qc_score;
 
-          const [qcRecordRows]: any = await connection.execute(
-            "SELECT qc_score FROM qc_records WHERE id = ?",
-            [existingRows[0].id]
-          );
-          const qcScore = qcRecordRows.length > 0 ? qcRecordRows[0].qc_score : null;
-
-          // Use correction creation date if original submission date is not available
-          const final_submission_time = safeParams.date_of_file_submission
-            ? new Date(safeParams.date_of_file_submission).toLocaleDateString("en-IN", {
-                day: "2-digit",
-                month: "short",
-                year: "numeric",
-              })
-            : correctionCreatedAt
-            ? new Date(correctionCreatedAt).toLocaleDateString("en-IN", {
-                day: "2-digit",
-                month: "short",
-                year: "numeric",
-              })
-            : "N/A";
-
-          sendQCEmailInternal({
-            agent_name: emailData.agent_name,
-            agent_email: emailData.agent_email,
-            project_name: emailData.project_name,
-            task_name: emailData.task_name,
-            qa_name: emailData.qa_name,
-            status: "correction", // Specify this is a correction completion
-            qc_score: qcScore, // Fetch QC score from qc_records table
-            file_path: sampleFilePath, // Fetch sample file from correction history
-            submission_time: final_submission_time,
-          }).catch((err: any) =>
-            console.error("[QC Regular] Asynchronous email failed:", err),
-          );
-        }
+        dispatchQcCompletionEmail({
+          agent_id: safeParams.agent_id,
+          project_id: safeParams.project_id,
+          task_id: safeParams.task_id,
+          qa_user_id: safeParams.qa_user_id,
+          tracker_id: safeParams.tracker_id,
+          status: "correction",
+          qc_score: qcScore,
+          error_list: safeParams.error_list,
+          comments,
+          file_path: sampleFilePath,
+          submission_time: safeParams.date_of_file_submission || correctionCreatedAt,
+        });
 
         return res.status(200).json({
           success: true,
@@ -392,40 +343,19 @@ export const saveRegularQC = async (req: Request, res: Response) => {
 
     await connection.commit();
 
-    // Send Background Email (Async)
-    const emailData = await getQCRecordEmailDetails(
-      connection,
-      safeParams.agent_id,
-      safeParams.project_id,
-      safeParams.task_id,
-      safeParams.qa_user_id,
-    );
-
-    if (emailData) {
-      const submission_time = safeParams.date_of_file_submission
-        ? new Date(safeParams.date_of_file_submission).toLocaleDateString("en-IN", {
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-          })
-        : "N/A";
-
-      sendQCEmailInternal({
-        agent_email: emailData.agent_email,
-        status: "regular",
-        project_name: emailData.project_name,
-        task_name: emailData.task_name,
-        qc_agent_name: emailData.qa_name,
-        qc_score: safeParams.qc_score,
-        error_count: safeParams.error_list ? JSON.parse(safeParams.error_list).length || 0 : 0,
-        error_list: safeParams.error_list ? JSON.parse(safeParams.error_list) : [],
-        comments: "",
-        file_path: safeParams.qc_file_path,
-        submission_time,
-      }).catch((err: any) =>
-        console.error("[QC Regular] Asynchronous email failed:", err),
-      );
-    }
+    dispatchQcCompletionEmail({
+      agent_id: safeParams.agent_id,
+      project_id: safeParams.project_id,
+      task_id: safeParams.task_id,
+      qa_user_id: safeParams.qa_user_id,
+      tracker_id: safeParams.tracker_id,
+      status: "regular",
+      qc_score: safeParams.qc_score,
+      error_list: safeParams.error_list,
+      comments,
+      file_path: safeParams.qc_file_path,
+      submission_time: safeParams.date_of_file_submission,
+    });
 
     return res.status(200).json({
       success: true,

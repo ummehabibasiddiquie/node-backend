@@ -217,14 +217,38 @@ export async function getQCRecordEmailDetails(
   agent_id: number,
   project_id: number,
   task_id: number,
-  qa_user_id: number
+  qa_user_id: number,
+  tracker_id?: number | null
 ): Promise<any> {
   try {
-    console.log(`[QC Helper] Fetching email details for agent_id: ${agent_id}`);
+    console.log(
+      `[QC Helper] Fetching email details for agent_id: ${agent_id}, tracker_id: ${tracker_id}`,
+    );
     const [agentRows]: any = await connection.execute(
       "SELECT user_name, user_email FROM tfs_user WHERE user_id = ?",
       [agent_id]
     );
+    let agentName = agentRows[0]?.user_name || null;
+    let agentEmail = (agentRows[0]?.user_email || "").trim();
+
+    if ((!agentEmail || agentRows.length === 0) && tracker_id) {
+      const [trackerRows]: any = await connection.execute(
+        `SELECT u.user_name, u.user_email
+         FROM task_work_tracker t
+         INNER JOIN tfs_user u ON u.user_id = t.user_id
+         WHERE t.tracker_id = ?
+         LIMIT 1`,
+        [tracker_id]
+      );
+      if (trackerRows.length > 0) {
+        agentName = agentName || trackerRows[0].user_name;
+        agentEmail = agentEmail || (trackerRows[0].user_email || "").trim();
+        console.log(
+          `[QC Helper] Agent email resolved from tracker ${tracker_id}: ${agentEmail || "(empty)"}`,
+        );
+      }
+    }
+
     const [projectRows]: any = await connection.execute(
       "SELECT project_name FROM project WHERE project_id = ?",
       [project_id]
@@ -238,15 +262,20 @@ export async function getQCRecordEmailDetails(
       [qa_user_id]
     );
 
-    if (agentRows.length > 0) {
-      return {
-        agent_email: agentRows[0].user_email,
-        agent_name: agentRows[0].user_name,
-        project_name: projectRows[0]?.project_name || "N/A",
-        task_name: taskRows[0]?.task_name || "N/A",
-        qa_name: qaRows[0] ? qaRows[0].user_name : "QA Department",
-      };
+    if (!agentEmail) {
+      console.error(
+        `[QC Helper] No agent email found (agent_id=${agent_id}, tracker_id=${tracker_id})`,
+      );
+      return null;
     }
+
+    return {
+      agent_email: agentEmail,
+      agent_name: agentName || "Agent",
+      project_name: projectRows[0]?.project_name || "N/A",
+      task_name: taskRows[0]?.task_name || "N/A",
+      qa_name: qaRows[0] ? qaRows[0].user_name : "QA Department",
+    };
   } catch (err) {
     console.error("[QC Helper] Error fetching email details:", err);
   }

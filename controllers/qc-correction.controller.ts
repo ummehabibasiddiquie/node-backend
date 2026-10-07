@@ -2,11 +2,10 @@ import { Request, Response } from "express";
 import { get_db_connection } from "../database/db";
 import { QCWorkflowService } from "../services/qc-workflow.service";
 import {
-  getQCRecordEmailDetails,
   handleQCStatusTransitions,
   uploadSampleToCloudinary,
 } from "../utils/qc-helpers";
-import { sendQCEmailInternal } from "../controllers/mail.controller";
+import { dispatchQcCompletionEmail } from "../controllers/mail.controller";
 
 /**
  * Controller for handling Correction QC evaluations
@@ -155,69 +154,36 @@ export const saveCorrectionQC = async (req: Request, res: Response) => {
 
     await connection.commit();
 
-    // Send Background Email (Async)
-    const emailData = await getQCRecordEmailDetails(
-      connection,
+    const [correctionHistoryRows]: any = await connection.execute(
+      "SELECT qc_file_path, created_at FROM qc_correction_history WHERE qc_record_id = ? ORDER BY correction_count DESC LIMIT 1",
+      [qcId]
+    );
+    const sampleFilePath =
+      correctionHistoryRows.length > 0
+        ? correctionHistoryRows[0].qc_file_path
+        : uploadedQCFilePath || qc_file_path || null;
+    const correctionCreatedAt =
+      correctionHistoryRows.length > 0 ? correctionHistoryRows[0].created_at : null;
+
+    const [qcRecordRows]: any = await connection.execute(
+      "SELECT qc_score FROM qc_records WHERE id = ?",
+      [qcId]
+    );
+    const qcScore = qcRecordRows.length > 0 ? qcRecordRows[0].qc_score : qc_score;
+
+    dispatchQcCompletionEmail({
       agent_id,
       project_id,
       task_id,
       qa_user_id,
-    );
-
-    if (emailData) {
-      const submission_time = date_of_file_submission
-        ? new Date(date_of_file_submission).toLocaleDateString("en-IN", {
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-          })
-        : "N/A";
-
-      // Fetch QC score and sample file path from correction history
-      const [correctionHistoryRows]: any = await connection.execute(
-        "SELECT qc_file_path, created_at FROM qc_correction_history WHERE qc_record_id = ? ORDER BY correction_count DESC LIMIT 1",
-        [qcId]
-      );
-      const sampleFilePath = correctionHistoryRows.length > 0 ? correctionHistoryRows[0].qc_file_path : null;
-      const correctionCreatedAt = correctionHistoryRows.length > 0 ? correctionHistoryRows[0].created_at : null;
-
-      const [qcRecordRows]: any = await connection.execute(
-        "SELECT qc_score FROM qc_records WHERE id = ?",
-        [qcId]
-      );
-      const qcScore = qcRecordRows.length > 0 ? qcRecordRows[0].qc_score : null;
-
-      // Use correction creation date if original submission date is not available
-      const final_submission_time = date_of_file_submission
-        ? new Date(date_of_file_submission).toLocaleDateString("en-IN", {
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-          })
-        : correctionCreatedAt
-        ? new Date(correctionCreatedAt).toLocaleDateString("en-IN", {
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-          })
-        : "N/A";
-
-      sendQCEmailInternal({
-        agent_email: emailData.agent_email,
-        status: "correction",
-        project_name: emailData.project_name,
-        task_name: emailData.task_name,
-        qc_agent_name: emailData.qa_name,
-        qc_score: qcScore, // Fetch QC score from qc_records table
-        error_count: error_list?.length || 0,
-        error_list,
-        comments: comments || "",
-        file_path: sampleFilePath, // Fetch sample file from correction history
-        submission_time: final_submission_time,
-      }).catch((err: any) =>
-        console.error("[QC Correction] Asynchronous email failed:", err),
-      );
-    }
+      tracker_id,
+      status: "correction",
+      qc_score: qcScore,
+      error_list,
+      comments,
+      file_path: sampleFilePath,
+      submission_time: date_of_file_submission || correctionCreatedAt,
+    });
 
     return res.status(200).json({
       success: true,

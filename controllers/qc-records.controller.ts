@@ -5,11 +5,10 @@ import ExcelJS from "exceljs";
 import axios from "axios";
 import get_db_connection from "../database/db";
 import { PYTHON_URL } from "../config/env";
-import { sendQCEmailInternal } from "./mail.controller";
+import { dispatchQcCompletionEmail } from "./mail.controller";
 import { formatDatesInRows } from "../utils/date-formatter";
 import {
   uploadSampleToCloudinary,
-  getQCRecordEmailDetails,
   handleQCStatusTransitions,
   formatSubmissionDate,
   annotateWorksheetWithQcErrors,
@@ -527,15 +526,6 @@ export const saveQCRecord = async (req: Request, res: Response) => {
       qcId = (result as any).insertId;
     }
 
-    // 3. Fetch Details for Email Notification
-    const emailData = await getQCRecordEmailDetails(
-      connection,
-      agent_id,
-      project_id,
-      task_id,
-      qa_user_id,
-    );
-
     // 4. Handle Specialized Workflows (Workflow Factory/Service)
     // First check if this is a rework submission that should update rework_history instead of qc_records
     if (status === "regular") {
@@ -648,35 +638,22 @@ export const saveQCRecord = async (req: Request, res: Response) => {
 
     await connection.commit();
 
-    // 6. Send Background Email (Async)
-    if (emailData) {
-      const submission_time = date_of_file_submission
-        ? new Date(date_of_file_submission).toLocaleDateString("en-IN", {
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-          })
-        : "N/A";
-
-      sendQCEmailInternal({
-        agent_email: emailData.agent_email,
-        status,
-        project_name: emailData.project_name,
-        task_name: emailData.task_name,
-        qc_agent_name: emailData.qa_name,
-        qc_score,
-        error_count: error_list?.length || 0,
-        error_list,
-        comments: req.body.comments || "",
-        file_path:
-          status === "rework" || status === "correction"
-            ? whole_file_path
-            : qc_file_path,
-        submission_time,
-      }).catch((err: any) =>
-        console.error("[QC Service] Asynchronous email failed:", err),
-      );
-    }
+    dispatchQcCompletionEmail({
+      agent_id,
+      project_id,
+      task_id,
+      qa_user_id,
+      tracker_id,
+      status,
+      qc_score,
+      error_list,
+      comments: req.body.comments || "",
+      file_path:
+        status === "rework" || status === "correction"
+          ? whole_file_path
+          : qc_file_path,
+      submission_time: date_of_file_submission,
+    });
 
     return res.status(200).json({
       success: true,

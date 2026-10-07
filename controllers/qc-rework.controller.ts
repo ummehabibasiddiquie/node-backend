@@ -2,11 +2,10 @@ import { Request, Response } from "express";
 import { get_db_connection } from "../database/db";
 import { QCWorkflowService } from "../services/qc-workflow.service";
 import {
-  getQCRecordEmailDetails,
   handleQCStatusTransitions,
   uploadSampleToCloudinary,
 } from "../utils/qc-helpers";
-import { sendQCEmailInternal } from "../controllers/mail.controller";
+import { dispatchQcCompletionEmail } from "../controllers/mail.controller";
 
 /**
  * Controller for handling Rework QC evaluations
@@ -158,40 +157,19 @@ export const saveReworkQC = async (req: Request, res: Response) => {
 
     await connection.commit();
 
-    // Send Background Email (Async)
-    const emailData = await getQCRecordEmailDetails(
-      connection,
+    dispatchQcCompletionEmail({
       agent_id,
       project_id,
       task_id,
       qa_user_id,
-    );
-
-    if (emailData) {
-      const submission_time = date_of_file_submission
-        ? new Date(date_of_file_submission).toLocaleDateString("en-IN", {
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-          })
-        : "N/A";
-
-      sendQCEmailInternal({
-        agent_email: emailData.agent_email,
-        status: "rework",
-        project_name: emailData.project_name,
-        task_name: emailData.task_name,
-        qc_agent_name: emailData.qa_name,
-        qc_score,
-        error_count: error_list?.length || 0,
-        error_list,
-        comments: comments || "",
-        file_path: whole_file_path,
-        submission_time,
-      }).catch((err: any) =>
-        console.error("[QC Rework] Asynchronous email failed:", err),
-      );
-    }
+      tracker_id,
+      status: "rework",
+      qc_score,
+      error_list,
+      comments,
+      file_path: whole_file_path,
+      submission_time: date_of_file_submission,
+    });
 
     return res.status(200).json({
       success: true,
@@ -320,40 +298,19 @@ export const saveReworkRegularQC = async (req: Request, res: Response) => {
 
     await connection.commit();
 
-    // Send Background Email (Async)
-    const emailData = await getQCRecordEmailDetails(
-      connection,
+    dispatchQcCompletionEmail({
       agent_id,
       project_id,
       task_id,
       qa_user_id,
-    );
-
-    if (emailData) {
-      const submission_time = date_of_file_submission
-        ? new Date(date_of_file_submission).toLocaleDateString("en-IN", {
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-          })
-        : "N/A";
-
-      sendQCEmailInternal({
-        agent_email: emailData.agent_email,
-        status: "regular",
-        project_name: emailData.project_name,
-        task_name: emailData.task_name,
-        qc_agent_name: emailData.qa_name,
-        qc_score,
-        error_count: error_list?.length || 0,
-        error_list,
-        comments: comments || "",
-        file_path: qc_file_path,
-        submission_time,
-      }).catch((err: any) =>
-        console.error("[QC Rework Regular] Asynchronous email failed:", err),
-      );
-    }
+      tracker_id,
+      status: "regular",
+      qc_score,
+      error_list,
+      comments,
+      file_path: qc_file_path,
+      submission_time: date_of_file_submission,
+    });
 
     return res.status(200).json({
       success: true,
