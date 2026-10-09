@@ -70,7 +70,6 @@ export const saveCorrectionQC = async (req: Request, res: Response) => {
     );
 
     let qcId: number;
-    let originalQCStatus: string;
 
     if (existingRows.length === 0) {
       // Create initial QC record if none exists
@@ -101,11 +100,15 @@ export const saveCorrectionQC = async (req: Request, res: Response) => {
         ]
       );
       qcId = insertResult.insertId;
-      originalQCStatus = 'pending'; // Default status for new records
     } else {
       qcId = existingRows[0].id;
-      originalQCStatus = existingRows[0].qc_status;
     }
+
+    // A rework file can still be pending when QA sends the same record for correction.
+    await QCWorkflowService.closePendingCycle(connection, qcId, "rework", {
+      error_list: error_list || [],
+      qc_score: qc_score || 0,
+    });
 
     // Handle correction workflow
     const finalQCStatus = await QCWorkflowService.handleCorrectionWorkflow(
@@ -131,13 +134,12 @@ export const saveCorrectionQC = async (req: Request, res: Response) => {
       qcId
     );
 
-    // Update the final status if it was changed by the workflow
-    if (finalQCStatus !== originalQCStatus) {
-      await connection.execute(
-        "UPDATE qc_records SET qc_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        [finalQCStatus, qcId],
-      );
-    }
+    await QCWorkflowService.syncQcRecordDecision(connection, qcId, {
+      status: "correction",
+      qcStatus: finalQCStatus,
+      qcScore: qc_score ?? null,
+      errorList: error_list || [],
+    });
 
     // Update qc_status in task_work_tracker
     if (tracker_id) {

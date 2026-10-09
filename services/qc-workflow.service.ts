@@ -250,6 +250,69 @@ export class QCWorkflowService {
    * Records an agent's file upload for an existing Rework or Correction cycle.
    * Updates the 'open' row (where file_path is NULL) with the new file URL.
    */
+  /**
+   * QA reviewed one file type but the other type is still waiting.
+   * Close that leftover pending cycle so it leaves the rework/correction queue.
+   */
+  static async closePendingCycle(
+    connection: Connection,
+    qcId: number,
+    type: "rework" | "correction",
+    data: { error_list?: any[]; qc_score?: string | number }
+  ): Promise<void> {
+    if (type === "rework") {
+      const [result]: any = await connection.execute(
+        `UPDATE qc_rework_history
+         SET rework_error_list = ?,
+             rework_qc_score = ?,
+             rework_status = 'completed',
+             rework_file_qc_status = 'completed',
+             updated_at = CURRENT_TIMESTAMP
+         WHERE qc_record_id = ?
+           AND rework_file_qc_status = 'pending'`,
+        [JSON.stringify(data.error_list || []), data.qc_score ?? null, qcId]
+      );
+      if (result?.affectedRows) {
+        console.log(`[QC Workflow] Closed ${result.affectedRows} pending rework cycle(s) for QC ID ${qcId}`);
+      }
+      return;
+    }
+
+    const [result]: any = await connection.execute(
+      `UPDATE qc_correction_history
+       SET correction_error_list = ?,
+           correction_status = 'completed',
+           correction_file_qc_status = 'completed',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE qc_record_id = ?
+         AND correction_file_qc_status = 'pending'`,
+      [JSON.stringify(data.error_list || []), qcId]
+    );
+    if (result?.affectedRows) {
+      console.log(`[QC Workflow] Closed ${result.affectedRows} pending correction cycle(s) for QC ID ${qcId}`);
+    }
+  }
+
+  /** Keep the QC report row in step with the decision QA just saved. */
+  static async syncQcRecordDecision(
+    connection: Connection,
+    qcId: number,
+    decision: { status: string; qcStatus: string; qcScore?: string | number | null; errorList?: any }
+  ): Promise<void> {
+    const errorList =
+      decision.errorList == null
+        ? null
+        : typeof decision.errorList === "string"
+          ? decision.errorList
+          : JSON.stringify(decision.errorList);
+    await connection.execute(
+      `UPDATE qc_records
+       SET status = ?, qc_status = ?, qc_score = ?, error_list = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [decision.status, decision.qcStatus, decision.qcScore ?? null, errorList, qcId]
+    );
+  }
+
   static async recordAgentUpload(
     connection: Connection,
     qcId: number,

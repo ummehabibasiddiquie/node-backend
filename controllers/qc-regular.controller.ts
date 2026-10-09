@@ -116,21 +116,33 @@ export const saveRegularQC = async (req: Request, res: Response) => {
         );
 
         // Run status-transition side-effects
+        await QCWorkflowService.closePendingCycle(
+          connection,
+          existingRows[0].id,
+          "correction",
+          {
+            error_list: safeParams.error_list ? JSON.parse(safeParams.error_list) : [],
+            qc_score: safeParams.qc_score,
+          }
+        );
+
         await handleQCStatusTransitions(
           connection,
           "regular",
           safeParams.agent_id,
           safeParams.project_id,
           safeParams.task_id,
+          safeParams.whole_file_path,
           safeParams.tracker_id,
-          existingRows[0].id,
-          safeParams.whole_file_path
+          existingRows[0].id
         );
 
-        await connection.execute(
-          "UPDATE qc_records SET qc_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-          [finalQCStatus, existingRows[0].id],
-        );
+        await QCWorkflowService.syncQcRecordDecision(connection, existingRows[0].id, {
+          status: "regular",
+          qcStatus: finalQCStatus,
+          qcScore: safeParams.qc_score,
+          errorList: safeParams.error_list,
+        });
 
         // Update qc_status in task_work_tracker
         if (safeParams.tracker_id) {
@@ -192,24 +204,33 @@ export const saveRegularQC = async (req: Request, res: Response) => {
         );
 
         // Run status-transition side-effects
+        await QCWorkflowService.closePendingCycle(
+          connection,
+          existingRows[0].id,
+          "rework",
+          {
+            error_list: safeParams.error_list ? JSON.parse(safeParams.error_list) : [],
+            qc_score: safeParams.qc_score,
+          }
+        );
+
         await handleQCStatusTransitions(
           connection,
           "regular",
           safeParams.agent_id,
           safeParams.project_id,
           safeParams.task_id,
+          safeParams.whole_file_path,
           safeParams.tracker_id,
-          existingRows[0].id,
-          safeParams.whole_file_path
+          existingRows[0].id
         );
 
-        // Update the final status if it was changed by the workflow
-        if (finalQCStatus !== existingRows[0].qc_status) {
-          await connection.execute(
-            "UPDATE qc_records SET qc_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            [finalQCStatus, existingRows[0].id],
-          );
-        }
+        await QCWorkflowService.syncQcRecordDecision(connection, existingRows[0].id, {
+          status: "regular",
+          qcStatus: finalQCStatus,
+          qcScore: safeParams.qc_score,
+          errorList: safeParams.error_list,
+        });
 
         // Update qc_status in task_work_tracker
         if (safeParams.tracker_id) {

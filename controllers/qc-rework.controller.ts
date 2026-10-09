@@ -107,6 +107,12 @@ export const saveReworkQC = async (req: Request, res: Response) => {
       originalQCStatus = existingRows[0].qc_status;
     }
 
+    // A correction file can still be pending when QA sends the same record for rework.
+    await QCWorkflowService.closePendingCycle(connection, qcId, "correction", {
+      error_list: error_list || [],
+      qc_score: qc_score || 0,
+    });
+
     // Handle rework workflow
     const finalQCStatus = await QCWorkflowService.handleReworkWorkflow(
       connection,
@@ -129,15 +135,17 @@ export const saveReworkQC = async (req: Request, res: Response) => {
       agent_id,
       project_id,
       task_id,
+      whole_file_path,
       tracker_id,
-      qcId,
-      whole_file_path
+      qcId
     );
 
-    await connection.execute(
-      "UPDATE qc_records SET qc_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-      [finalQCStatus, qcId],
-    );
+    await QCWorkflowService.syncQcRecordDecision(connection, qcId, {
+      status: "rework",
+      qcStatus: finalQCStatus,
+      qcScore: qc_score || 0,
+      errorList: error_list || [],
+    });
 
     // Update qc_status in task_work_tracker
     if (tracker_id) {
@@ -272,13 +280,17 @@ export const saveReworkRegularQC = async (req: Request, res: Response) => {
       },
     );
 
-    // Update the final status if it was changed by the workflow
-    if (finalQCStatus !== existingRows[0].qc_status) {
-      await connection.execute(
-        "UPDATE qc_records SET qc_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        [finalQCStatus, qcId],
-      );
-    }
+    await QCWorkflowService.closePendingCycle(connection, qcId, "correction", {
+      error_list: error_list || [],
+      qc_score: qc_score || 0,
+    });
+
+    await QCWorkflowService.syncQcRecordDecision(connection, qcId, {
+      status: "regular",
+      qcStatus: finalQCStatus,
+      qcScore: qc_score || 0,
+      errorList: error_list || [],
+    });
 
     // Update qc_status in task_work_tracker
     if (tracker_id) {
