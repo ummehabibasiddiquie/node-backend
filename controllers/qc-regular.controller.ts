@@ -127,13 +127,10 @@ export const saveRegularQC = async (req: Request, res: Response) => {
           safeParams.whole_file_path
         );
 
-        // Update the final status if it was changed by the workflow
-        if (finalQCStatus !== existingRows[0].qc_status) {
-          await connection.execute(
-            "UPDATE qc_records SET qc_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            [finalQCStatus, existingRows[0].id],
-          );
-        }
+        await connection.execute(
+          "UPDATE qc_records SET qc_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+          [finalQCStatus, existingRows[0].id],
+        );
 
         // Update qc_status in task_work_tracker
         if (safeParams.tracker_id) {

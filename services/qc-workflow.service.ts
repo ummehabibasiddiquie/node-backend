@@ -191,7 +191,8 @@ export class QCWorkflowService {
              file_record_count       = ?,
              qc_data_generated_count = ?,
              rework_status           = ?,
-             rework_file_qc_status   = 'completed'
+             rework_file_qc_status   = 'completed',
+             updated_at              = CURRENT_TIMESTAMP
          WHERE qc_rework_id = ?`,
         [
           JSON.stringify(data.error_list),

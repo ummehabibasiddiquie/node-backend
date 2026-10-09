@@ -134,13 +134,10 @@ export const saveReworkQC = async (req: Request, res: Response) => {
       whole_file_path
     );
 
-    // Update the final status if it was changed by the workflow
-    if (finalQCStatus !== originalQCStatus) {
-      await connection.execute(
-        "UPDATE qc_records SET qc_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        [finalQCStatus, qcId],
-      );
-    }
+    await connection.execute(
+      "UPDATE qc_records SET qc_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+      [finalQCStatus, qcId],
+    );
 
     // Update qc_status in task_work_tracker
     if (tracker_id) {
