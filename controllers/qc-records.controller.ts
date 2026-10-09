@@ -13,6 +13,8 @@ import {
   formatSubmissionDate,
   annotateWorksheetWithQcErrors,
   parseQcErrorList,
+  attachQcCodesToErrorList,
+  errorsNeedQcCodeBackfill,
 } from "../utils/qc-helpers";
 import { QCWorkflowService } from "../services/qc-workflow.service";
 import { uploadBufferToCloudinary } from "../utils/cloudinary-utils";
@@ -578,9 +580,11 @@ export const saveQCRecord = async (req: Request, res: Response) => {
         status,
         {
           qc_file_path,
-          whole_file_path,  // Add this missing parameter
+          whole_file_path,
           error_list,
-          // no qc_score — correction is status-only
+          qc_score,
+          file_record_count,
+          qc_generated_count,
         },
       );
     } else if (status === "rework") {
@@ -947,7 +951,19 @@ export const downloadAnnotatedQcFile = async (req: Request, res: Response) => {
       }
     }
 
-    annotateWorksheetWithQcErrors(sheet, errors);
+    const enriched = attachQcCodesToErrorList(sheet, errors);
+    if (errorsNeedQcCodeBackfill(errors) && enriched.some((err) => err?.qc_code)) {
+      try {
+        await connection.execute(
+          "UPDATE qc_records SET error_list = ? WHERE id = ?",
+          [JSON.stringify(enriched), record.id]
+        );
+      } catch (persistErr) {
+        console.error("QC code persist failed:", persistErr);
+      }
+    }
+
+    annotateWorksheetWithQcErrors(sheet, enriched);
 
     const downloadFileName = `QC_Errors_Record_${record.id}.xlsx`;
     res.setHeader(

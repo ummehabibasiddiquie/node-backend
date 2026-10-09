@@ -41,4 +41,11 @@ const transporter = nodemailer.createTransport({
   socketTimeout: 20000,
 });
 
+if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
+  transporter.verify().then(
+    () => console.log("[Email] SMTP connection verified."),
+    (err) => console.error("[Email] SMTP verify failed. QC mails will not send:", err?.message || err),
+  );
+}
+
 export default transporter;

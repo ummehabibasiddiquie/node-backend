@@ -63,6 +63,9 @@ export class QCWorkflowService {
       whole_file_path: string | null;
       qc_file_path: string | null;
       error_list: any[];
+      qc_score?: string | number;
+      file_record_count?: number;
+      qc_generated_count?: number;
     }
   ): Promise<string> {
     console.log(`[QC Workflow] Processing Correction Flow for QC ID: ${qcId}`);

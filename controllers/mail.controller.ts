@@ -18,11 +18,9 @@ export const sendQCEmailInternal = async (options: QCEmailOptions) => {
   const finalMessage =
     typeof message === "string"
       ? message
-      : typeof comments === "string"
-        ? comments
-        : comments
-          ? String(comments)
-          : "";
+      : comments == null
+        ? ""
+        : String(comments);
   console.log(`[Email Service] Starting email process for: ${agent_email} status=${status}`);
 
   if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
@@ -34,16 +32,24 @@ export const sendQCEmailInternal = async (options: QCEmailOptions) => {
     throw new Error("agent_email is required");
   }
 
+  let html: string;
+  try {
+    html = generateReworkEmailHtml({
+      status,
+      ...templateData,
+      message: finalMessage || undefined,
+    });
+  } catch (err) {
+    console.error("[Email Service] HTML template failed, sending text-only:", err);
+    html = `<p>${finalMessage || `QC review completed with status: ${status}`}</p>`;
+  }
+
   const mailOptions = {
     from: `"${fromName}" <${accountEmail}>`,
     to: agent_email,
     subject: subject || `QC Notification: ${status || "Update"}`,
     text: finalMessage || `QC review completed with status: ${status}`,
-    html: generateReworkEmailHtml({
-      status,
-      ...templateData,
-      message: finalMessage || undefined,
-    }),
+    html,
   };
 
   try {
@@ -104,20 +110,43 @@ export function dispatchQcCompletionEmail(payload: QcCompletionEmailPayload): vo
 }
 
 async function sendQcCompletionEmail(payload: QcCompletionEmailPayload): Promise<void> {
+  console.log(
+    `[QC Email] Dispatch start status=${payload.status} agent_id=${payload.agent_id} tracker_id=${payload.tracker_id}`,
+  );
   const connection = await get_db_connection();
   try {
+    let agentId = payload.agent_id;
+    let projectId = payload.project_id;
+    let taskId = payload.task_id;
+    const trackerId = payload.tracker_id;
+
+    if ((!agentId || !projectId || !taskId) && trackerId != null && trackerId !== ("" as any)) {
+      const [qcRows]: any = await connection.execute(
+        "SELECT agent_id, project_id, task_id FROM qc_records WHERE tracker_id = ? LIMIT 1",
+        [Number(trackerId)],
+      );
+      if (qcRows.length > 0) {
+        agentId = agentId || qcRows[0].agent_id;
+        projectId = projectId || qcRows[0].project_id;
+        taskId = taskId || qcRows[0].task_id;
+        console.log(
+          `[QC Email] Filled missing ids from qc_records tracker=${trackerId} agent_id=${agentId}`,
+        );
+      }
+    }
+
     const emailData = await getQCRecordEmailDetails(
       connection,
-      payload.agent_id as number,
-      payload.project_id as number,
-      payload.task_id as number,
+      agentId as number,
+      projectId as number,
+      taskId as number,
       payload.qa_user_id as number,
-      payload.tracker_id,
+      trackerId,
     );
 
     if (!emailData?.agent_email) {
       console.error(
-        `[QC Email] Skipped: no agent email (status=${payload.status}, agent_id=${payload.agent_id}, tracker_id=${payload.tracker_id})`,
+        `[QC Email] Skipped: no agent email (status=${payload.status}, agent_id=${agentId}, tracker_id=${trackerId})`,
       );
       return;
     }

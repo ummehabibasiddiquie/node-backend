@@ -155,7 +155,7 @@ export const generateReworkEmailHtml = (data: ReworkEmailData): string => {
                   <table width="100%" cellpadding="10" cellspacing="0" style="border-collapse: collapse; font-size: 13px; color: ${accentColor}; background-color: #ffffff; border: 1px solid ${boxBorderColor};">
                     <thead>
                       <tr style="background-color: ${boxBorderColor}33;">
-                        <th style="border: 1px solid ${boxBorderColor}; text-align: left;">Row</th>
+                        <th style="border: 1px solid ${boxBorderColor}; text-align: left;">QC Code</th>
                         <th style="border: 1px solid ${boxBorderColor}; text-align: left;">Category</th>
                         <th style="border: 1px solid ${boxBorderColor}; text-align: left;">Subcategory</th>
                         <th style="border: 1px solid ${boxBorderColor}; text-align: right;">Points</th>
@@ -166,7 +166,7 @@ export const generateReworkEmailHtml = (data: ReworkEmailData): string => {
                         .map(
                           (err: any) => `
                         <tr>
-                          <td style="border: 1px solid ${boxBorderColor}; text-align: left;">${err.row || "-"}</td>
+                          <td style="border: 1px solid ${boxBorderColor}; text-align: left;">${err.qc_code || err.qcCode || "-"}</td>
                           <td style="border: 1px solid ${boxBorderColor}; text-align: left;">${err.category || "-"}</td>
                           <td style="border: 1px solid ${boxBorderColor}; text-align: left;">${err.subcategory || "-"}</td>
                           <td style="border: 1px solid ${boxBorderColor}; text-align: right;">${err.points || 0}</td>
@@ -191,7 +191,7 @@ export const generateReworkEmailHtml = (data: ReworkEmailData): string => {
               <div style="margin-bottom:24px;">
                 <strong style="display:block; margin-bottom:8px; color: #475569;">QA Comments:</strong>
                 <div style="padding:20px; background-color:#f1f5f9; border-left:4px solid #94a3b8; color:#334155; font-style: italic;">
-                  ${message.replace(/\n/g, "<br>")}
+                  ${String(message).replace(/\n/g, "<br>")}
                 </div>
               </div>
               `

@@ -46,22 +46,121 @@ export function qcErrorLabel(error: any): string {
   );
 }
 
+export function excelCellText(value: any): string {
+  if (value == null || value === "") return "";
+  if (typeof value !== "object") return String(value).trim();
+  if ((value as any).text != null) return String((value as any).text).trim();
+  if (Array.isArray((value as any).richText)) {
+    return (value as any).richText.map((part: any) => part?.text || "").join("").trim();
+  }
+  if ((value as any).result != null) return String((value as any).result).trim();
+  if ((value as any).hyperlink) return String((value as any).hyperlink).trim();
+  return "";
+}
+
+function normalizeHeaderName(name: any): string {
+  return excelCellText(name).replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function isQcCodeHeader(name: any): boolean {
+  const n = normalizeHeaderName(name);
+  if (!n) return false;
+  if (n === "qc code" || n === "qccode") return true;
+  return n.includes("qc") && n.includes("code");
+}
+
+function normalizeQcCode(value: any): string {
+  return excelCellText(value).replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function errorQcCode(err: any): string {
+  if (!err || typeof err !== "object") return "";
+  return normalizeQcCode(err.qc_code || err.qcCode || err.QC_Code);
+}
+
+function findQcCodeColumn(header: ExcelJS.Row): number | null {
+  let found: number | null = null;
+  header.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+    if (found != null) return;
+    if (isQcCodeHeader(cell.value)) found = colNumber;
+  });
+  return found;
+}
+
+function sheetLastDataRow(sheet: ExcelJS.Worksheet): number {
+  let lastDataRow = 1;
+  let hitSummary = false;
+  sheet.eachRow({ includeEmpty: false }, (row) => {
+    if (row.number === 1) return;
+    const first = excelCellText(row.getCell(1).value).toLowerCase();
+    if (first === "error list") {
+      hitSummary = true;
+      return;
+    }
+    if (hitSummary) return;
+    if (row.number > lastDataRow) lastDataRow = row.number;
+  });
+  return lastDataRow;
+}
+
+export function errorsNeedQcCodeBackfill(errorList: any): boolean {
+  return parseQcErrorList(errorList).some(
+    (err) => err && typeof err === "object" && !errorQcCode(err)
+  );
+}
+
+/** Fill qc_code on legacy errors using the sample sheet (row 1 = first image). */
+export function attachQcCodesToErrorList(
+  sheet: ExcelJS.Worksheet,
+  errorList: any
+): any[] {
+  const errors = parseQcErrorList(errorList).map((err) =>
+    err && typeof err === "object" ? { ...err } : err
+  );
+  const qcCol = findQcCodeColumn(sheet.getRow(1));
+  if (!qcCol) return errors;
+
+  const lastDataRow = sheetLastDataRow(sheet);
+  const displayByRow = new Map<number, string>();
+  for (let r = 2; r <= lastDataRow; r++) {
+    const raw = excelCellText(sheet.getRow(r).getCell(qcCol).value);
+    if (raw) displayByRow.set(r, raw);
+  }
+  const dataRows = [...displayByRow.keys()].sort((a, b) => a - b);
+  if (dataRows.length === 0) return errors;
+
+  const onlyCode = dataRows.length === 1 ? displayByRow.get(dataRows[0]) : "";
+
+  errors.forEach((err) => {
+    if (!err || typeof err !== "object" || errorQcCode(err)) return;
+    if (onlyCode) {
+      err.qc_code = onlyCode;
+      return;
+    }
+    const rowNum = Number(err.row);
+    if (!Number.isFinite(rowNum)) return;
+    const mapped = displayByRow.get(rowNum + 1) || displayByRow.get(rowNum);
+    if (mapped) err.qc_code = mapped;
+  });
+  return errors;
+}
+
 /**
  * Adds an Errors column, highlights rows that have QC errors, and
  * appends the unique error list at the bottom of that column.
- * `error.row` is 1-based sample-record index (Excel data starts at row 2).
+ * Prefers matching QC Code so one image is never marked as two Excel rows.
  */
 export function annotateWorksheetWithQcErrors(
   sheet: ExcelJS.Worksheet,
   errorList: any
 ): void {
-  const errors = parseQcErrorList(errorList);
+  const errors = attachQcCodesToErrorList(sheet, errorList);
   const header = sheet.getRow(1);
   let lastCol = 1;
   let existingErrorCol: number | null = null;
   header.eachCell({ includeEmpty: false }, (cell, colNumber) => {
     if (colNumber > lastCol) lastCol = colNumber;
-    const text = String(cell.value || "").trim().toLowerCase();
+    const text = excelCellText(cell.value).toLowerCase();
     if (text === "errors") existingErrorCol = colNumber;
   });
   if (sheet.columnCount > lastCol) lastCol = sheet.columnCount;
@@ -78,31 +177,51 @@ export function annotateWorksheetWithQcErrors(
   headerCell.alignment = { vertical: "middle", wrapText: true };
   sheet.getColumn(errorCol).width = 48;
 
-  const byRow = new Map<number, string[]>();
-  const uniqueCounts = new Map<string, number>();
-  errors.forEach((err) => {
-    const label = qcErrorLabel(err).trim();
-    if (!label) return;
-    uniqueCounts.set(label, (uniqueCounts.get(label) || 0) + 1);
-    const rowNum = Number(err?.row);
-    if (!Number.isFinite(rowNum) || rowNum < 1) return;
-    // error.row matches the Excel row shown in View Error (header is row 1).
-    const list = byRow.get(rowNum) || [];
-    if (!list.includes(label)) list.push(label);
-    byRow.set(rowNum, list);
-  });
-
+  const qcCol = findQcCodeColumn(header);
   let lastDataRow = 1;
   let hitSummary = false;
   sheet.eachRow({ includeEmpty: false }, (row) => {
     if (row.number === 1) return;
-    const val = String(row.getCell(errorCol).value || "").trim().toLowerCase();
+    const val = excelCellText(row.getCell(errorCol).value).toLowerCase();
     if (val === "error list") {
       hitSummary = true;
       return;
     }
     if (hitSummary) return;
     if (row.number > lastDataRow) lastDataRow = row.number;
+  });
+
+  const codeToExcelRows = new Map<string, number[]>();
+  if (qcCol) {
+    for (let r = 2; r <= lastDataRow; r++) {
+      const code = normalizeQcCode(sheet.getRow(r).getCell(qcCol).value);
+      if (!code) continue;
+      const list = codeToExcelRows.get(code) || [];
+      list.push(r);
+      codeToExcelRows.set(code, list);
+    }
+  }
+
+  const byRow = new Map<number, string[]>();
+  const uniqueCounts = new Map<string, number>();
+  errors.forEach((err) => {
+    const label = qcErrorLabel(err).trim();
+    if (!label) return;
+    uniqueCounts.set(label, (uniqueCounts.get(label) || 0) + 1);
+
+    const code = errorQcCode(err);
+    let excelRows: number[] = code ? codeToExcelRows.get(code) || [] : [];
+    if (excelRows.length === 0) {
+      const rowNum = Number(err?.row);
+      if (Number.isFinite(rowNum) && rowNum >= 2) excelRows = [rowNum];
+    }
+
+    excelRows.forEach((excelRow) => {
+      if (excelRow < 2) return;
+      const list = byRow.get(excelRow) || [];
+      if (!list.includes(label)) list.push(label);
+      byRow.set(excelRow, list);
+    });
   });
 
   byRow.forEach((labels, excelRow) => {
@@ -205,6 +324,16 @@ export async function uploadSampleToCloudinary(
   return null;
 }
 
+function sqlId(value: any): number | null {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function rowEmail(row: any): string {
+  return String(row?.user_email || row?.email || "").trim();
+}
+
 /**
  * Fetches required details for email notification in a single batch of queries.
  */
@@ -217,50 +346,87 @@ export async function getQCRecordEmailDetails(
   tracker_id?: number | null
 ): Promise<any> {
   try {
+    const agentId = sqlId(agent_id);
+    const projectId = sqlId(project_id);
+    const taskId = sqlId(task_id);
+    const qaId = sqlId(qa_user_id);
+    const trackerId = sqlId(tracker_id);
     console.log(
-      `[QC Helper] Fetching email details for agent_id: ${agent_id}, tracker_id: ${tracker_id}`,
+      `[QC Helper] Fetching email details for agent_id: ${agentId}, tracker_id: ${trackerId}`,
     );
-    const [agentRows]: any = await connection.execute(
-      "SELECT user_name, user_email FROM tfs_user WHERE user_id = ?",
-      [agent_id]
-    );
-    let agentName = agentRows[0]?.user_name || null;
-    let agentEmail = (agentRows[0]?.user_email || "").trim();
 
-    if ((!agentEmail || agentRows.length === 0) && tracker_id) {
+    let agentName: string | null = null;
+    let agentEmail = "";
+
+    if (agentId != null) {
+      const [agentRows]: any = await connection.execute(
+        "SELECT user_name, user_email FROM tfs_user WHERE user_id = ?",
+        [agentId]
+      );
+      agentName = agentRows[0]?.user_name || null;
+      agentEmail = rowEmail(agentRows[0]);
+    }
+
+    if (!agentEmail && trackerId != null) {
       const [trackerRows]: any = await connection.execute(
         `SELECT u.user_name, u.user_email
          FROM task_work_tracker t
          INNER JOIN tfs_user u ON u.user_id = t.user_id
          WHERE t.tracker_id = ?
          LIMIT 1`,
-        [tracker_id]
+        [trackerId]
       );
       if (trackerRows.length > 0) {
         agentName = agentName || trackerRows[0].user_name;
-        agentEmail = agentEmail || (trackerRows[0].user_email || "").trim();
+        agentEmail = rowEmail(trackerRows[0]);
         console.log(
-          `[QC Helper] Agent email resolved from tracker ${tracker_id}: ${agentEmail || "(empty)"}`,
+          `[QC Helper] Agent email resolved from tracker ${trackerId}: ${agentEmail || "(empty)"}`,
         );
       }
     }
 
-    const [projectRows]: any = await connection.execute(
-      "SELECT project_name FROM project WHERE project_id = ?",
-      [project_id]
-    );
-    const [taskRows]: any = await connection.execute(
-      "SELECT task_name FROM task WHERE task_id = ?",
-      [task_id]
-    );
-    const [qaRows]: any = await connection.execute(
-      "SELECT user_name FROM tfs_user WHERE user_id = ?",
-      [qa_user_id]
-    );
+    if (!agentEmail && agentName) {
+      const [nameRows]: any = await connection.execute(
+        `SELECT user_email FROM tfs_user
+         WHERE user_name = ? AND user_email IS NOT NULL AND TRIM(user_email) != ''
+         LIMIT 1`,
+        [agentName]
+      );
+      agentEmail = rowEmail(nameRows[0]);
+      if (agentEmail) {
+        console.log(`[QC Helper] Agent email resolved by name "${agentName}": ${agentEmail}`);
+      }
+    }
+
+    let projectName = "N/A";
+    let taskName = "N/A";
+    let qaName = "QA Department";
+
+    if (projectId != null) {
+      const [projectRows]: any = await connection.execute(
+        "SELECT project_name FROM project WHERE project_id = ?",
+        [projectId]
+      );
+      projectName = projectRows[0]?.project_name || "N/A";
+    }
+    if (taskId != null) {
+      const [taskRows]: any = await connection.execute(
+        "SELECT task_name FROM task WHERE task_id = ?",
+        [taskId]
+      );
+      taskName = taskRows[0]?.task_name || "N/A";
+    }
+    if (qaId != null) {
+      const [qaRows]: any = await connection.execute(
+        "SELECT user_name FROM tfs_user WHERE user_id = ?",
+        [qaId]
+      );
+      qaName = qaRows[0]?.user_name || "QA Department";
+    }
 
     if (!agentEmail) {
       console.error(
-        `[QC Helper] No agent email found (agent_id=${agent_id}, tracker_id=${tracker_id})`,
+        `[QC Helper] No agent email found (agent_id=${agentId}, tracker_id=${trackerId})`,
       );
       return null;
     }
@@ -268,9 +434,9 @@ export async function getQCRecordEmailDetails(
     return {
       agent_email: agentEmail,
       agent_name: agentName || "Agent",
-      project_name: projectRows[0]?.project_name || "N/A",
-      task_name: taskRows[0]?.task_name || "N/A",
-      qa_name: qaRows[0] ? qaRows[0].user_name : "QA Department",
+      project_name: projectName,
+      task_name: taskName,
+      qa_name: qaName,
     };
   } catch (err) {
     console.error("[QC Helper] Error fetching email details:", err);
