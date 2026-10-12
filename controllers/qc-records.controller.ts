@@ -33,6 +33,31 @@ function sanitizeFileUrl(raw: string): string {
   return raw;
 }
 
+/** Latest agent rework upload for this tracker. First-time QC keeps the original tracker file. */
+async function latestReworkFileUrl(trackerId: number | string): Promise<string | null> {
+  const connection = await get_db_connection();
+  try {
+    const [rows]: any = await connection.execute(
+      `SELECT rh.rework_file_path
+       FROM qc_rework_history rh
+       INNER JOIN qc_records qr ON qr.id = rh.qc_record_id
+       WHERE qr.tracker_id = ?
+         AND rh.rework_file_qc_status = 'pending'
+         AND rh.rework_file_path IS NOT NULL
+         AND rh.rework_file_path <> ''
+       ORDER BY rh.rework_count DESC
+       LIMIT 1`,
+      [trackerId]
+    );
+    return rows?.[0]?.rework_file_path || null;
+  } catch (error) {
+    console.error("[QC Service] Could not load latest rework file:", error);
+    return null;
+  } finally {
+    if (connection) await connection.end();
+  }
+}
+
 function resolveSamplingPercentage(
   samplingPercentage: unknown,
   tracker: any,
@@ -100,7 +125,11 @@ export const generateCustomSample = async (req: Request, res: Response) => {
         .status(404)
         .json({ success: false, message: "Tracker or file not found" });
     }
-    const originalFileUrl: string = sanitizeFileUrl(tracker.tracker_file);
+    const reworkFileUrl = await latestReworkFileUrl(tracker_id);
+    const originalFileUrl: string = sanitizeFileUrl(reworkFileUrl || tracker.tracker_file);
+    if (reworkFileUrl) {
+      console.log(`[QC Service] Rework QC sample uses latest agent file for tracker ${tracker_id}`);
+    }
 
     if (!originalFileUrl) {
       return res.status(404).json({
@@ -258,7 +287,11 @@ export const downloadCustomSample = async (req: Request, res: Response) => {
         .status(404)
         .json({ success: false, message: "Tracker or file not found" });
     }
-    const originalFileUrl: string = sanitizeFileUrl(tracker.tracker_file);
+    const reworkFileUrl = await latestReworkFileUrl(tracker_id);
+    const originalFileUrl: string = sanitizeFileUrl(reworkFileUrl || tracker.tracker_file);
+    if (reworkFileUrl) {
+      console.log(`[QC Service] Rework sample download uses latest agent file for tracker ${tracker_id}`);
+    }
 
     // 2. Stream the file directly from Cloudinary
     const fileResponse = await axios.get(originalFileUrl, {

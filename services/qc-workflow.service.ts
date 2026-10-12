@@ -88,15 +88,26 @@ export class QCWorkflowService {
 
       console.log(`[QC Workflow] Updating results for Correction Cycle ${currentCount}`);
 
-      // ── 2. Update the results of the check performed on this cycle ────────────
-      await connection.execute(
-        `UPDATE qc_correction_history
-         SET correction_error_list     = ?,
-             correction_status         = 'completed',
-             correction_file_qc_status = 'completed'
-         WHERE qc_correction_id = ?`,
-        [JSON.stringify(data.error_list || []), activeRow.qc_correction_id]
-      );
+      // A status-only save has no new error list. Keep the errors already stored.
+      const hasErrors = data.error_list !== undefined && data.error_list !== null;
+      if (hasErrors) {
+        await connection.execute(
+          `UPDATE qc_correction_history
+           SET correction_error_list     = ?,
+               correction_status         = 'completed',
+               correction_file_qc_status = 'completed'
+           WHERE qc_correction_id = ?`,
+          [JSON.stringify(data.error_list), activeRow.qc_correction_id]
+        );
+      } else {
+        await connection.execute(
+          `UPDATE qc_correction_history
+           SET correction_status         = 'completed',
+               correction_file_qc_status = 'completed'
+           WHERE qc_correction_id = ?`,
+          [activeRow.qc_correction_id]
+        );
+      }
     } else {
       // No active row found (either first time marking correction, or history was purged)
       const [countRows]: any = await connection.execute(
@@ -261,16 +272,27 @@ export class QCWorkflowService {
     data: { error_list?: any[]; qc_score?: string | number }
   ): Promise<void> {
     if (type === "rework") {
+      const sets = [
+        "rework_status = 'completed'",
+        "rework_file_qc_status = 'completed'",
+        "updated_at = CURRENT_TIMESTAMP",
+      ];
+      const params: any[] = [];
+      if (data.error_list !== undefined && data.error_list !== null) {
+        sets.unshift("rework_error_list = ?");
+        params.push(JSON.stringify(data.error_list));
+      }
+      if (data.qc_score !== undefined && data.qc_score !== null && data.qc_score !== "") {
+        sets.unshift("rework_qc_score = ?");
+        params.push(data.qc_score);
+      }
+      params.push(qcId);
       const [result]: any = await connection.execute(
         `UPDATE qc_rework_history
-         SET rework_error_list = ?,
-             rework_qc_score = ?,
-             rework_status = 'completed',
-             rework_file_qc_status = 'completed',
-             updated_at = CURRENT_TIMESTAMP
+         SET ${sets.join(", ")}
          WHERE qc_record_id = ?
            AND rework_file_qc_status = 'pending'`,
-        [JSON.stringify(data.error_list || []), data.qc_score ?? null, qcId]
+        params
       );
       if (result?.affectedRows) {
         console.log(`[QC Workflow] Closed ${result.affectedRows} pending rework cycle(s) for QC ID ${qcId}`);
@@ -278,15 +300,23 @@ export class QCWorkflowService {
       return;
     }
 
+    const sets = [
+      "correction_status = 'completed'",
+      "correction_file_qc_status = 'completed'",
+      "updated_at = CURRENT_TIMESTAMP",
+    ];
+    const params: any[] = [];
+    if (data.error_list !== undefined && data.error_list !== null) {
+      sets.unshift("correction_error_list = ?");
+      params.push(JSON.stringify(data.error_list));
+    }
+    params.push(qcId);
     const [result]: any = await connection.execute(
       `UPDATE qc_correction_history
-       SET correction_error_list = ?,
-           correction_status = 'completed',
-           correction_file_qc_status = 'completed',
-           updated_at = CURRENT_TIMESTAMP
+       SET ${sets.join(", ")}
        WHERE qc_record_id = ?
          AND correction_file_qc_status = 'pending'`,
-      [JSON.stringify(data.error_list || []), qcId]
+      params
     );
     if (result?.affectedRows) {
       console.log(`[QC Workflow] Closed ${result.affectedRows} pending correction cycle(s) for QC ID ${qcId}`);
@@ -299,17 +329,32 @@ export class QCWorkflowService {
     qcId: number,
     decision: { status: string; qcStatus: string; qcScore?: string | number | null; errorList?: any }
   ): Promise<void> {
-    const errorList =
-      decision.errorList == null
-        ? null
-        : typeof decision.errorList === "string"
+    const sets = ["status = ?", "qc_status = ?", "updated_at = CURRENT_TIMESTAMP"];
+    const params: any[] = [decision.status, decision.qcStatus];
+
+    // A later status-only save (marking correction completed) must not erase the first QC score.
+    const hasScore =
+      decision.qcScore !== undefined &&
+      decision.qcScore !== null &&
+      decision.qcScore !== "";
+    if (hasScore) {
+      sets.push("qc_score = ?");
+      params.push(decision.qcScore);
+    }
+
+    if (decision.errorList !== undefined && decision.errorList !== null) {
+      const errorList =
+        typeof decision.errorList === "string"
           ? decision.errorList
           : JSON.stringify(decision.errorList);
+      sets.push("error_list = ?");
+      params.push(errorList);
+    }
+
+    params.push(qcId);
     await connection.execute(
-      `UPDATE qc_records
-       SET status = ?, qc_status = ?, qc_score = ?, error_list = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
-      [decision.status, decision.qcStatus, decision.qcScore ?? null, errorList, qcId]
+      `UPDATE qc_records SET ${sets.join(", ")} WHERE id = ?`,
+      params
     );
   }
 

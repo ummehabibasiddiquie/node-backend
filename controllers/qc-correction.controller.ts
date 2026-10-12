@@ -42,6 +42,9 @@ export const saveCorrectionQC = async (req: Request, res: Response) => {
 
     const resolvedGeneratedCount =
       data_generated_count ?? qc_generated_count ?? 0;
+    const requestedStatus = String(req.body.status || "correction").toLowerCase();
+    const markCompleted = requestedStatus === "completed" || requestedStatus === "regular";
+    const submissionStatus = markCompleted ? "regular" : "correction";
 
     const uploadedQCFilePath =
       qc_file_records && whole_file_path
@@ -106,39 +109,39 @@ export const saveCorrectionQC = async (req: Request, res: Response) => {
 
     // A rework file can still be pending when QA sends the same record for correction.
     await QCWorkflowService.closePendingCycle(connection, qcId, "rework", {
-      error_list: error_list || [],
-      qc_score: qc_score || 0,
+      error_list,
+      qc_score,
     });
 
-    // Handle correction workflow
+    // Completed closes this cycle. Correction opens the next one.
     const finalQCStatus = await QCWorkflowService.handleCorrectionWorkflow(
       connection,
       qcId,
-      "correction",
+      submissionStatus,
       {
         whole_file_path: whole_file_path || null,
         qc_file_path: uploadedQCFilePath || qc_file_path || null,
-        error_list: error_list || [],
+        error_list,
       },
     );
 
     // Run status-transition side-effects
     await handleQCStatusTransitions(
       connection,
-      "correction",
+      submissionStatus,
       agent_id,
       project_id,
       task_id,
-      "", // whole_file_path not needed for correction flow
+      whole_file_path || "",
       tracker_id,
       qcId
     );
 
     await QCWorkflowService.syncQcRecordDecision(connection, qcId, {
       status: "correction",
-      qcStatus: finalQCStatus,
-      qcScore: qc_score ?? null,
-      errorList: error_list || [],
+      qcStatus: markCompleted ? "completed" : finalQCStatus,
+      qcScore: qc_score,
+      errorList: error_list,
     });
 
     // Update qc_status in task_work_tracker
