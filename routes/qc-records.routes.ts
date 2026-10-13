@@ -2,6 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import {
   generateCustomSample,
+  lookupQcRow,
   downloadCustomSample,
   downloadAnnotatedQcFile,
   saveQCRecord,
@@ -19,6 +20,7 @@ const upload = multer({
 });
 
 router.post("/qc-records/generate-sample", generateCustomSample);
+router.post("/qc-records/lookup-row", lookupQcRow);
 router.get("/qc-records/download-sample/:tracker_id", downloadCustomSample);
 router.get("/qc-records/download-annotated/:id", downloadAnnotatedQcFile);
 router.post("/qc-records/save", saveQCRecord);

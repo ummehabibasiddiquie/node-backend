@@ -11,6 +11,7 @@ import {
   uploadSampleToCloudinary,
   handleQCStatusTransitions,
   formatSubmissionDate,
+  excelCellText,
   annotateWorksheetWithQcErrors,
   parseQcErrorList,
   attachQcCodesToErrorList,
@@ -25,6 +26,26 @@ import { uploadBufferToCloudinary } from "../utils/cloudinary-utils";
  * e.g. "/python/uploads/tracker_files/https://res.cloudinary.com/..."
  *   => "https://res.cloudinary.com/..."
  */
+function plainCellValue(value: any): string | number | boolean | null {
+  if (value == null || value === "") return null;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value !== "object") return value;
+  if (value.result instanceof Date) return value.result.toISOString();
+  const text = excelCellText(value);
+  return text === "" ? null : text;
+}
+
+function uniqueHeaderLabel(value: any, colNumber: number, used: Set<string>): string {
+  let label = excelCellText(value) || `col_${colNumber}`;
+  if (used.has(label)) {
+    let n = 2;
+    while (used.has(`${label} (${n})`)) n += 1;
+    label = `${label} (${n})`;
+  }
+  used.add(label);
+  return label;
+}
+
 function sanitizeFileUrl(raw: string): string {
   const httpIdx = raw.indexOf("https://");
   if (httpIdx > 0) return raw.substring(httpIdx);
@@ -56,6 +77,95 @@ async function latestReworkFileUrl(trackerId: number | string): Promise<string |
   } finally {
     if (connection) await connection.end();
   }
+}
+
+function isQcCodeHeaderLabel(name: string): boolean {
+  const normalized = String(name || "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  const compact = normalized.replace(/[^a-z0-9]/g, "");
+  if (!normalized) return false;
+  if (normalized === "qc code" || compact === "qccode") return true;
+  return normalized.includes("qc") && normalized.includes("code");
+}
+
+function worksheetHeaders(worksheet: ExcelJS.Worksheet): string[] {
+  const headers: string[] = [];
+  const usedHeaders = new Set<string>();
+  worksheet.getRow(1).eachCell((cell, colNumber) => {
+    headers[colNumber - 1] = uniqueHeaderLabel(cell.value, colNumber, usedHeaders);
+  });
+  return headers;
+}
+
+function rowHasValues(worksheet: ExcelJS.Worksheet, rowNumber: number): boolean {
+  const row = worksheet.getRow(rowNumber);
+  let hasValue = false;
+  row.eachCell({ includeEmpty: false }, (cell) => {
+    if (plainCellValue(cell.value) != null) hasValue = true;
+  });
+  return hasValue;
+}
+
+function rowToRecord(worksheet: ExcelJS.Worksheet, headers: string[], rowNumber: number) {
+  const row = worksheet.getRow(rowNumber);
+  const record: Record<string, any> = { _excel_row: rowNumber };
+  row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+    record[headers[colNumber - 1] || `col_${colNumber}`] = plainCellValue(cell.value);
+  });
+  return record;
+}
+
+function recordQcCode(record: Record<string, any>): string {
+  const match = Object.entries(record).find(([key]) => isQcCodeHeaderLabel(key));
+  return match ? excelCellText(match[1]).replace(/\s+/g, " ").trim() : "";
+}
+
+async function loadQcWorksheet(trackerId: number | string, loggedInUserId: unknown) {
+  if (!PYTHON_URL) {
+    throw Object.assign(new Error("Python backend URL not configured"), { statusCode: 500 });
+  }
+  const pythonUrl = PYTHON_URL.endsWith("/")
+    ? `${PYTHON_URL}tracker/view`
+    : `${PYTHON_URL}/tracker/view`;
+  const pythonResponse = await axios.post(pythonUrl, {
+    tracker_id: trackerId,
+    logged_in_user_id: loggedInUserId,
+  });
+  if (pythonResponse.status !== 200) {
+    throw Object.assign(
+      new Error(pythonResponse.data?.message || "Failed to fetch tracker info from Python backend"),
+      { statusCode: pythonResponse.status },
+    );
+  }
+  const trackers = pythonResponse.data?.data?.trackers || [];
+  const tracker = trackers.find((item: any) => item.tracker_id == trackerId);
+  if (!tracker || !tracker.tracker_file) {
+    throw Object.assign(new Error("Tracker or file not found"), { statusCode: 404 });
+  }
+  const reworkFileUrl = await latestReworkFileUrl(trackerId);
+  const fileUrl = sanitizeFileUrl(reworkFileUrl || tracker.tracker_file);
+  if (!fileUrl) {
+    throw Object.assign(new Error("Tracker has no file attached"), { statusCode: 404 });
+  }
+  const fileResponse = await axios.get(fileUrl, { responseType: "arraybuffer" });
+  const workbook = new ExcelJS.Workbook();
+  const ext = path.extname(new URL(fileUrl).pathname).toLowerCase();
+  if (ext === ".xlsx") {
+    await workbook.xlsx.load(fileResponse.data as ArrayBuffer);
+  } else if (ext === ".csv") {
+    const { Readable } = await import("stream");
+    await workbook.csv.read(Readable.from(Buffer.from(fileResponse.data as ArrayBuffer)));
+  } else {
+    throw Object.assign(new Error(`Unsupported file format: ${ext}`), { statusCode: 400 });
+  }
+  const worksheet = workbook.worksheets[0];
+  if (!worksheet) {
+    throw Object.assign(new Error("Worksheet not found in file"), { statusCode: 404 });
+  }
+  return { tracker, worksheet, headers: worksheetHeaders(worksheet), usedReworkFile: Boolean(reworkFileUrl) };
 }
 
 function resolveSamplingPercentage(
@@ -197,34 +307,32 @@ export const generateCustomSample = async (req: Request, res: Response) => {
       [rowIndices[i], rowIndices[j]] = [rowIndices[j], rowIndices[i]];
     }
     const selectedIndices = rowIndices.slice(0, sampleSize);
+    const remainingIndices = rowIndices.slice(sampleSize);
     selectedIndices.sort((a, b) => a - b); // Keep original order for display
+    remainingIndices.sort((a, b) => a - b);
 
     // 4. Create new workbook for sample
     const sampleWorkbook = new ExcelJS.Workbook();
     const sampleSheet = sampleWorkbook.addWorksheet(`QC Sample ${percentage}%`);
 
-    // Copy headers
-    const headers: any[] = [];
+    // Copy headers. Duplicate names stay separate so a later formula column
+    // cannot replace an earlier text column (this file has two "Agent" columns).
+    const headers: string[] = [];
+    const usedHeaders = new Set<string>();
     worksheet.getRow(1).eachCell((cell, colNumber) => {
-      headers[colNumber - 1] = cell.value;
+      headers[colNumber - 1] = uniqueHeaderLabel(cell.value, colNumber, usedHeaders);
     });
     sampleSheet.addRow(headers);
 
     const sampleData: any[] = [];
     selectedIndices.forEach((idx) => {
-      const row = worksheet.getRow(idx);
-      const rowData: any[] = [];
-      const record: any = {};
-
-      row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-        const val = cell.value;
-        rowData[colNumber - 1] = val;
-        record[headers[colNumber - 1] || `col_${colNumber}`] = val;
-      });
-
+      const record = rowToRecord(worksheet, headers, idx);
+      const rowData = headers.map((_, colIndex) => record[headers[colIndex] || `col_${colIndex + 1}`] ?? null);
       sampleSheet.addRow(rowData);
       sampleData.push(record);
     });
+
+    const remainingData = remainingIndices.map((idx) => rowToRecord(worksheet, headers, idx));
 
     // 5. Build response (no longer saving file to disk)
     return res.status(200).json({
@@ -234,11 +342,72 @@ export const generateCustomSample = async (req: Request, res: Response) => {
         sampling_percentage: percentage,
         sample_size: sampleSize,
         sample_data: sampleData, // Send all data, frontend will filter 3 columns
+        remaining_data: remainingData,
       },
     });
   } catch (error) {
     console.error("Error generating QC sample:", error);
     return res.status(500).json({
+      success: false,
+      message: error instanceof Error ? error.message : "Internal server error",
+    });
+  }
+};
+
+export const lookupQcRow = async (req: Request, res: Response) => {
+  const { tracker_id, logged_in_user_id, excel_row, qc_code } = req.body || {};
+  if (!tracker_id) {
+    return res.status(400).json({ success: false, message: "tracker_id is required" });
+  }
+  const rowNumber = Number(excel_row);
+  const codeQuery = String(qc_code || "").replace(/\s+/g, " ").trim();
+  if ((!rowNumber || rowNumber < 2) && !codeQuery) {
+    return res.status(400).json({
+      success: false,
+      message: "Enter an Excel row number (2 or higher) or a QC code",
+    });
+  }
+
+  try {
+    const { worksheet, headers, usedReworkFile } = await loadQcWorksheet(tracker_id, logged_in_user_id);
+    let foundRow = 0;
+    if (rowNumber >= 2) {
+      if (rowNumber > worksheet.rowCount || !rowHasValues(worksheet, rowNumber)) {
+        return res.status(404).json({
+          success: false,
+          message: `Row ${rowNumber} is not a data row in this file`,
+        });
+      }
+      foundRow = rowNumber;
+    } else {
+      const wanted = codeQuery.toLowerCase();
+      for (let i = 2; i <= worksheet.rowCount; i++) {
+        if (!rowHasValues(worksheet, i)) continue;
+        const candidate = rowToRecord(worksheet, headers, i);
+        if (recordQcCode(candidate).toLowerCase() === wanted) {
+          foundRow = i;
+          break;
+        }
+      }
+      if (!foundRow) {
+        return res.status(404).json({
+          success: false,
+          message: `No row found for QC code ${codeQuery}`,
+        });
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        excel_row: foundRow,
+        record: rowToRecord(worksheet, headers, foundRow),
+        used_rework_file: usedReworkFile,
+      },
+    });
+  } catch (error: any) {
+    console.error("Error looking up QC row:", error);
+    return res.status(error?.statusCode || 500).json({
       success: false,
       message: error instanceof Error ? error.message : "Internal server error",
     });
