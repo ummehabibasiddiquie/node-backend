@@ -203,6 +203,7 @@ export class QCWorkflowService {
              qc_data_generated_count = ?,
              rework_status           = ?,
              rework_file_qc_status   = 'completed',
+             rework_sample_file      = COALESCE(?, rework_sample_file),
              updated_at              = CURRENT_TIMESTAMP
          WHERE qc_rework_id = ?`,
         [
@@ -211,6 +212,7 @@ export class QCWorkflowService {
           data.file_record_count || 0,
           data.qc_generated_count || 0,
           submissionStatus === "regular" ? "completed" : "rework",
+          data.qc_file_path || null,
           activeRow.qc_rework_id,
         ]
       );

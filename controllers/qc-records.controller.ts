@@ -26,13 +26,96 @@ import { uploadBufferToCloudinary } from "../utils/cloudinary-utils";
  * e.g. "/python/uploads/tracker_files/https://res.cloudinary.com/..."
  *   => "https://res.cloudinary.com/..."
  */
+/**
+ * Raw Excel values lose display formatting:
+ * - date cells become Date → old code used toISOString() so QC showed date+time
+ * - percent cells stay as decimals (16.30% stored as 0.163)
+ * ExcelJS cell.text is unreliable for these, so format from value + numFmt.
+ */
+function excelDateParts(value: Date): { y: number; m: number; d: number; h: number; min: number; s: number } {
+  // Date-only Excel cells usually arrive as UTC midnight; use UTC parts so the calendar day stays correct.
+  const utcMidnight =
+    value.getUTCHours() === 0 &&
+    value.getUTCMinutes() === 0 &&
+    value.getUTCSeconds() === 0 &&
+    value.getUTCMilliseconds() === 0;
+  if (utcMidnight) {
+    return {
+      y: value.getUTCFullYear(),
+      m: value.getUTCMonth() + 1,
+      d: value.getUTCDate(),
+      h: 0,
+      min: 0,
+      s: 0,
+    };
+  }
+  return {
+    y: value.getFullYear(),
+    m: value.getMonth() + 1,
+    d: value.getDate(),
+    h: value.getHours(),
+    min: value.getMinutes(),
+    s: value.getSeconds(),
+  };
+}
+
+function formatExcelDate(value: Date, numFmt = ""): string {
+  const parts = excelDateParts(value);
+  const y = String(parts.y);
+  const m = String(parts.m).padStart(2, "0");
+  const d = String(parts.d).padStart(2, "0");
+  const fmt = String(numFmt || "").toLowerCase();
+  const hasTimeToken = /h+|s+|am\/pm|a\/p/.test(fmt);
+  if (!hasTimeToken || (parts.h === 0 && parts.min === 0 && parts.s === 0)) {
+    return `${y}-${m}-${d}`;
+  }
+  const hh = String(parts.h).padStart(2, "0");
+  const mm = String(parts.min).padStart(2, "0");
+  const ss = String(parts.s).padStart(2, "0");
+  return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
+}
+
+function formatPercentNumber(value: number, numFmt: string): string {
+  const decimalsMatch = String(numFmt).match(/\.([0#]+)%/);
+  const decimals = decimalsMatch ? decimalsMatch[1].replace(/#/g, "0").length : 0;
+  return `${(value * 100).toFixed(decimals)}%`;
+}
+
+function cellRawValue(cell: ExcelJS.Cell): any {
+  const value = cell?.value;
+  if (value && typeof value === "object" && "result" in (value as object)) {
+    return (value as any).result;
+  }
+  return value;
+}
+
 function plainCellValue(value: any): string | number | boolean | null {
   if (value == null || value === "") return null;
-  if (value instanceof Date) return value.toISOString();
+  if (value instanceof Date) return formatExcelDate(value);
   if (typeof value !== "object") return value;
-  if (value.result instanceof Date) return value.result.toISOString();
+  if (value.result instanceof Date) return formatExcelDate(value.result);
+  if (typeof value.result === "number") return value.result;
   const text = excelCellText(value);
   return text === "" ? null : text;
+}
+
+function displayedCellValue(cell: ExcelJS.Cell): string | number | boolean | null {
+  if (cell == null || cell.value == null || cell.value === "") return null;
+
+  const numFmt = String(cell.numFmt || "");
+  const raw = cellRawValue(cell);
+
+  // Percent format: agent sees 16.30%, Excel stores 0.163
+  if (typeof raw === "number" && /%/.test(numFmt)) {
+    return formatPercentNumber(raw, numFmt);
+  }
+
+  // Date / date-only formats (yyyy-mm-dd, dd/mm/yyyy, etc.)
+  if (raw instanceof Date) {
+    return formatExcelDate(raw, numFmt);
+  }
+
+  return plainCellValue(cell.value);
 }
 
 function uniqueHeaderLabel(value: any, colNumber: number, used: Set<string>): string {
@@ -104,7 +187,7 @@ function rowHasValues(worksheet: ExcelJS.Worksheet, rowNumber: number): boolean 
   const row = worksheet.getRow(rowNumber);
   let hasValue = false;
   row.eachCell({ includeEmpty: false }, (cell) => {
-    if (plainCellValue(cell.value) != null) hasValue = true;
+    if (displayedCellValue(cell) != null) hasValue = true;
   });
   return hasValue;
 }
@@ -113,7 +196,7 @@ function rowToRecord(worksheet: ExcelJS.Worksheet, headers: string[], rowNumber:
   const row = worksheet.getRow(rowNumber);
   const record: Record<string, any> = { _excel_row: rowNumber };
   row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-    record[headers[colNumber - 1] || `col_${colNumber}`] = plainCellValue(cell.value);
+    record[headers[colNumber - 1] || `col_${colNumber}`] = displayedCellValue(cell);
   });
   return record;
 }

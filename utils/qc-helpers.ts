@@ -235,8 +235,15 @@ export function annotateWorksheetWithQcErrors(
       pattern: "solid",
       fgColor: { argb: "FFFFC7CE" },
     };
-    row.eachCell({ includeEmpty: true }, (dataCell, colNumber) => {
-      if (colNumber === errorCol) return;
+    const columnLine = {
+      style: "thin" as const,
+      color: { argb: "FFCBD5E1" },
+    };
+    for (let colNumber = 1; colNumber <= lastCol; colNumber += 1) {
+      if (colNumber === errorCol) continue;
+      const dataCell = row.getCell(colNumber);
+      dataCell.border = { top: columnLine, left: columnLine, bottom: columnLine, right: columnLine };
+      dataCell.alignment = { wrapText: true, vertical: "top" };
       if (!dataCell.fill || dataCell.fill.type !== "pattern") {
         dataCell.fill = {
           type: "pattern",
@@ -244,7 +251,7 @@ export function annotateWorksheetWithQcErrors(
           fgColor: { argb: "FFFFEBEE" },
         };
       }
-    });
+    }
     if (excelRow > lastDataRow) lastDataRow = excelRow;
   });
 
@@ -294,11 +301,58 @@ export async function uploadSampleToCloudinary(
       const sampleWorkbook = new ExcelJS.Workbook();
       const sampleSheet = sampleWorkbook.addWorksheet(`QC Sample ${percentage}%`);
 
-      const headers = Object.keys(sampleData[0]);
+      const hidden = new Set(["id", "has_error", "qc_errors"]);
+      const headers = Object.keys(sampleData[0]).filter(
+        (key) => key && !key.startsWith("_") && !hidden.has(key)
+      );
       sampleSheet.addRow(headers);
 
+      const plain = (value: any) => {
+        if (value == null || value === "") return null;
+        if (value instanceof Date) {
+          const y = value.getFullYear();
+          const m = String(value.getMonth() + 1).padStart(2, "0");
+          const d = String(value.getDate()).padStart(2, "0");
+          if (
+            value.getHours() === 0 &&
+            value.getMinutes() === 0 &&
+            value.getSeconds() === 0 &&
+            value.getMilliseconds() === 0
+          ) {
+            return `${y}-${m}-${d}`;
+          }
+          const hh = String(value.getHours()).padStart(2, "0");
+          const mm = String(value.getMinutes()).padStart(2, "0");
+          const ss = String(value.getSeconds()).padStart(2, "0");
+          return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
+        }
+        if (typeof value !== "object") return value;
+        if (value.text != null) return String(value.text);
+        if (value.result instanceof Date) return plain(value.result);
+        if (value.result != null) return value.result;
+        if (Array.isArray(value.richText)) return value.richText.map((part: any) => part?.text || "").join("");
+        return excelCellText(value) || null;
+      };
+
+      const columnLine = { style: "thin" as const, color: { argb: "FFCBD5E1" } };
+      headers.forEach((header, index) => {
+        const column = sampleSheet.getColumn(index + 1);
+        column.width = Math.min(36, Math.max(14, String(header).length + 2));
+      });
+      sampleSheet.getRow(1).eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1D4ED8" } };
+        cell.alignment = { wrapText: true, vertical: "middle" };
+        cell.border = { top: columnLine, left: columnLine, bottom: columnLine, right: columnLine };
+      });
+
       sampleData.forEach((record: any) => {
-        sampleSheet.addRow(headers.map((h) => record[h]));
+        const added = sampleSheet.addRow(headers.map((header) => plain(record[header])));
+        added.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+          if (colNumber > headers.length) return;
+          cell.alignment = { wrapText: true, vertical: "top" };
+          cell.border = { top: columnLine, left: columnLine, bottom: columnLine, right: columnLine };
+        });
       });
 
       if (error_list) {
