@@ -274,20 +274,22 @@ export class QCWorkflowService {
     data: { error_list?: any[]; qc_score?: string | number }
   ): Promise<void> {
     if (type === "rework") {
-      const sets = [
-        "rework_status = 'completed'",
-        "rework_file_qc_status = 'completed'",
-        "updated_at = CURRENT_TIMESTAMP",
-      ];
+      // Each placeholder and its value are pushed together so their order always matches.
+      const sets: string[] = [];
       const params: any[] = [];
       if (data.error_list !== undefined && data.error_list !== null) {
-        sets.unshift("rework_error_list = ?");
+        sets.push("rework_error_list = ?");
         params.push(JSON.stringify(data.error_list));
       }
       if (data.qc_score !== undefined && data.qc_score !== null && data.qc_score !== "") {
-        sets.unshift("rework_qc_score = ?");
+        sets.push("rework_qc_score = ?");
         params.push(data.qc_score);
       }
+      sets.push(
+        "rework_status = 'completed'",
+        "rework_file_qc_status = 'completed'",
+        "updated_at = CURRENT_TIMESTAMP",
+      );
       params.push(qcId);
       const [result]: any = await connection.execute(
         `UPDATE qc_rework_history
@@ -302,16 +304,17 @@ export class QCWorkflowService {
       return;
     }
 
-    const sets = [
+    const sets: string[] = [];
+    const params: any[] = [];
+    if (data.error_list !== undefined && data.error_list !== null) {
+      sets.push("correction_error_list = ?");
+      params.push(JSON.stringify(data.error_list));
+    }
+    sets.push(
       "correction_status = 'completed'",
       "correction_file_qc_status = 'completed'",
       "updated_at = CURRENT_TIMESTAMP",
-    ];
-    const params: any[] = [];
-    if (data.error_list !== undefined && data.error_list !== null) {
-      sets.unshift("correction_error_list = ?");
-      params.push(JSON.stringify(data.error_list));
-    }
+    );
     params.push(qcId);
     const [result]: any = await connection.execute(
       `UPDATE qc_correction_history
