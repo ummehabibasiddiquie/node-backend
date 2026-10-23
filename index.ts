@@ -1,7 +1,6 @@
 import express, { Request, Response } from "express";
 import { PORT } from "./config/env";
 import cors from "cors";
-import userRoutes from "./routes/user.routes";
 import trackerRoutes from "./routes/tracker.routes";
 import aiEvaluationRoutes from "./routes/ai-evaluation.routes";
 import geminiKeyRoutes from "./routes/gemini-key.routes";
@@ -30,7 +29,6 @@ app.get("/api/v1/health", (req: Request, res: Response) => {
   });
 });
 
-app.use("/api/v1", userRoutes);
 app.use("/api/v1", trackerRoutes);
 app.use("/api/v1", aiEvaluationRoutes);
 app.use("/api/v1", geminiKeyRoutes);

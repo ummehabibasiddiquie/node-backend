@@ -9,7 +9,6 @@ import {
   getQCRecords,
   getQCRecordById,
   updateQCRecord,
-  deleteQCRecord,
   agentUploadCorrection,
 } from "../controllers/qc-records.controller";
 
@@ -27,7 +26,6 @@ router.post("/qc-records/save", saveQCRecord);
 router.get("/qc-records/list", getQCRecords);
 router.get("/qc-records/view/:id", getQCRecordById);
 router.put("/qc-records/update/:id", updateQCRecord);
-router.delete("/qc-records/delete/:id", deleteQCRecord);
 router.post(
   "/qc-records/agent-upload",
   upload.single("file"),

@@ -109,7 +109,6 @@ Base URL: `http://localhost:<PORT>/api/v1`
   - `GET /qc-records/list`
   - `GET /qc-records/view/:id`
   - `PUT /qc-records/update/:id`
-  - `DELETE /qc-records/delete/:id`
   - `POST /qc-records/agent-upload`
 - **QC Status Buckets**
   - `POST /qc-regular/save`, `GET /qc-regular/list`

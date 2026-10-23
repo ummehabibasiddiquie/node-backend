@@ -1029,24 +1029,6 @@ export const updateQCRecord = async (req: Request, res: Response) => {
   }
 };
 
-export const deleteQCRecord = async (req: Request, res: Response) => {
-  const { id } = req.params;
-  const connection = await get_db_connection();
-  try {
-    await connection.execute("DELETE FROM qc_records WHERE id = ?", [id]);
-    return res
-      .status(200)
-      .json({ success: true, message: "QC record deleted successfully" });
-  } catch (error) {
-    console.error("Error deleting QC record:", error);
-    return res
-      .status(500)
-      .json({ success: false, message: "Internal server error" });
-  } finally {
-    await connection.end();
-  }
-};
-
 export const getQCRecords = async (req: Request, res: Response) => {
   const { logged_in_user_id } = req.query;
   const connection = await get_db_connection();
