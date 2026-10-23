@@ -385,7 +385,10 @@ export const saveRegularQC = async (req: Request, res: Response) => {
     console.error("Error saving regular QC record:", error);
     return res
       .status(500)
-      .json({ success: false, message: "Internal server error" });
+      .json({
+        success: false,
+        message: `Could not save QC: ${(error instanceof Error ? error.message : String(error)).slice(0, 200)}`,
+      });
   } finally {
     if (connection) await connection.end();
   }
