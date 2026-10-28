@@ -216,6 +216,7 @@ async function loadQcWorksheet(trackerId: number | string, loggedInUserId: unkno
   const pythonResponse = await axios.post(pythonUrl, {
     tracker_id: trackerId,
     logged_in_user_id: loggedInUserId,
+    scope: "qc",
   });
   if (pythonResponse.status !== 200) {
     throw Object.assign(
@@ -295,9 +296,11 @@ export const generateCustomSample = async (req: Request, res: Response) => {
       logged_in_user_id,
     });
 
+    // scope "qc": an Assistant Team Leader doing QC sees agents where they are the QA, not only their team
     const pythonResponse = await axios.post(pythonUrl, {
       tracker_id,
       logged_in_user_id,
+      scope: "qc",
     });
 
     if (pythonResponse.status !== 200) {
@@ -522,6 +525,7 @@ export const downloadCustomSample = async (req: Request, res: Response) => {
     const pythonResponse = await axios.post(pythonUrl, {
       tracker_id,
       logged_in_user_id,
+      scope: "qc",
     });
 
     if (pythonResponse.status !== 200) {
