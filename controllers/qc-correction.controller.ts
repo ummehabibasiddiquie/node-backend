@@ -3,6 +3,8 @@ import { get_db_connection } from "../database/db";
 import { QCWorkflowService } from "../services/qc-workflow.service";
 import {
   handleQCStatusTransitions,
+  qcScoreMatchesStatus,
+  requiredStatusForQcScore,
   uploadSampleToCloudinary,
 } from "../utils/qc-helpers";
 import { dispatchQcCompletionEmail } from "../controllers/mail.controller";
@@ -45,6 +47,13 @@ export const saveCorrectionQC = async (req: Request, res: Response) => {
     const requestedStatus = String(req.body.status || "correction").toLowerCase();
     const markCompleted = requestedStatus === "completed" || requestedStatus === "regular";
     const submissionStatus = markCompleted ? "regular" : "correction";
+    if (!markCompleted && !qcScoreMatchesStatus(qc_score, "correction")) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: `QC score ${qc_score} cannot be saved as Correction. Use ${requiredStatusForQcScore(qc_score)}.`,
+      });
+    }
 
     const uploadedQCFilePath =
       qc_file_records && whole_file_path
@@ -68,7 +77,7 @@ export const saveCorrectionQC = async (req: Request, res: Response) => {
 
     // Check if QC record exists for this tracker
     const [existingRows]: any = await connection.execute(
-      "SELECT id, qc_status FROM qc_records WHERE tracker_id = ?",
+      "SELECT id, qc_status, qc_score FROM qc_records WHERE tracker_id = ?",
       [tracker_id]
     );
 
@@ -142,6 +151,7 @@ export const saveCorrectionQC = async (req: Request, res: Response) => {
       qcStatus: markCompleted ? "completed" : finalQCStatus,
       qcScore: qc_score,
       errorList: error_list,
+      preserveOriginalScore: existingRows.length > 0 && existingRows[0].qc_score != null,
     });
 
     // Update qc_status in task_work_tracker

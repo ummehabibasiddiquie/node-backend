@@ -557,3 +557,21 @@ export function generateSystematicSample<T>(records: T[], sampleSize: number): T
 
   return sampled;
 }
+
+export type QcDecisionStatus = "regular" | "correction" | "rework";
+
+/** First QC decision from score: 100 regular, 98–99.99 correction, below 98 rework. */
+export function requiredStatusForQcScore(score: unknown): QcDecisionStatus {
+  const n = Number(score);
+  if (!Number.isFinite(n) || n < 98) return "rework";
+  if (n < 100) return "correction";
+  return "regular";
+}
+
+export function qcScoreMatchesStatus(score: unknown, status: unknown): boolean {
+  const requested = String(status || "").toLowerCase();
+  if (requested === "completed") {
+    return requiredStatusForQcScore(score) === "regular";
+  }
+  return requiredStatusForQcScore(score) === requested;
+}

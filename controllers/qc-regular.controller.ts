@@ -3,6 +3,7 @@ import { get_db_connection } from "../database/db";
 import { QCWorkflowService } from "../services/qc-workflow.service";
 import {
   handleQCStatusTransitions,
+  requiredStatusForQcScore,
   uploadSampleToCloudinary,
 } from "../utils/qc-helpers";
 import { dispatchQcCompletionEmail } from "../controllers/mail.controller";
@@ -85,7 +86,7 @@ export const saveRegularQC = async (req: Request, res: Response) => {
 
     // Check if QC record already exists for this tracker
     const [existingRows]: any = await connection.execute(
-      "SELECT id, qc_status FROM qc_records WHERE tracker_id = ?",
+      "SELECT id, qc_status, qc_score, status FROM qc_records WHERE tracker_id = ?",
       [safeParams.tracker_id]
     );
 
@@ -138,10 +139,8 @@ export const saveRegularQC = async (req: Request, res: Response) => {
         );
 
         await QCWorkflowService.syncQcRecordDecision(connection, existingRows[0].id, {
-          status: "regular",
           qcStatus: finalQCStatus,
-          qcScore: safeParams.qc_score,
-          errorList: safeParams.error_list,
+          preserveOriginalScore: existingRows[0].qc_score != null,
         });
 
         // Update qc_status in task_work_tracker
@@ -226,10 +225,8 @@ export const saveRegularQC = async (req: Request, res: Response) => {
         );
 
         await QCWorkflowService.syncQcRecordDecision(connection, existingRows[0].id, {
-          status: "regular",
           qcStatus: finalQCStatus,
-          qcScore: safeParams.qc_score,
-          errorList: safeParams.error_list,
+          preserveOriginalScore: existingRows[0].qc_score != null,
         });
 
         // Update qc_status in task_work_tracker
@@ -285,6 +282,14 @@ export const saveRegularQC = async (req: Request, res: Response) => {
       return res.status(400).json({
         success: false,
         message: "QC record already exists for this tracker. Use rework or correction endpoints instead.",
+      });
+    }
+
+    if (requiredStatusForQcScore(safeParams.qc_score) !== "regular") {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: `QC score ${safeParams.qc_score} cannot be saved as Regular. Use ${requiredStatusForQcScore(safeParams.qc_score)}.`,
       });
     }
 

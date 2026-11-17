@@ -3,6 +3,8 @@ import { get_db_connection } from "../database/db";
 import { QCWorkflowService } from "../services/qc-workflow.service";
 import {
   handleQCStatusTransitions,
+  qcScoreMatchesStatus,
+  requiredStatusForQcScore,
   uploadSampleToCloudinary,
 } from "../utils/qc-helpers";
 import { dispatchQcCompletionEmail } from "../controllers/mail.controller";
@@ -63,9 +65,17 @@ export const saveReworkQC = async (req: Request, res: Response) => {
       });
     }
 
+    if (!qcScoreMatchesStatus(qc_score, "rework")) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: `QC score ${qc_score} cannot be saved as Rework. Use ${requiredStatusForQcScore(qc_score)}.`,
+      });
+    }
+
     // Check if QC record exists for this tracker
     const [existingRows]: any = await connection.execute(
-      "SELECT id, qc_status FROM qc_records WHERE tracker_id = ?",
+      "SELECT id, qc_status, qc_score FROM qc_records WHERE tracker_id = ?",
       [tracker_id]
     );
 
@@ -145,6 +155,7 @@ export const saveReworkQC = async (req: Request, res: Response) => {
       qcStatus: finalQCStatus,
       qcScore: qc_score || 0,
       errorList: error_list || [],
+      preserveOriginalScore: existingRows.length > 0 && existingRows[0].qc_score != null,
     });
 
     // Update qc_status in task_work_tracker
@@ -238,7 +249,7 @@ export const saveReworkRegularQC = async (req: Request, res: Response) => {
 
     // Check if QC record exists for this tracker
     const [existingRows]: any = await connection.execute(
-      "SELECT id, qc_status FROM qc_records WHERE tracker_id = ?",
+      "SELECT id, qc_status, qc_score FROM qc_records WHERE tracker_id = ?",
       [tracker_id]
     );
 
@@ -289,10 +300,8 @@ export const saveReworkRegularQC = async (req: Request, res: Response) => {
     });
 
     await QCWorkflowService.syncQcRecordDecision(connection, qcId, {
-      status: "regular",
       qcStatus: finalQCStatus,
-      qcScore: qc_score || 0,
-      errorList: error_list || [],
+      preserveOriginalScore: existingRows[0].qc_score != null,
     });
 
     // Update qc_status in task_work_tracker

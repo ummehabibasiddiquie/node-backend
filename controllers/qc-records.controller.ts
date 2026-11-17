@@ -16,6 +16,8 @@ import {
   parseQcErrorList,
   attachQcCodesToErrorList,
   errorsNeedQcCodeBackfill,
+  qcScoreMatchesStatus,
+  requiredStatusForQcScore,
 } from "../utils/qc-helpers";
 import { QCWorkflowService } from "../services/qc-workflow.service";
 import { uploadBufferToCloudinary } from "../utils/cloudinary-utils";
@@ -689,6 +691,19 @@ export const saveQCRecord = async (req: Request, res: Response) => {
   try {
     await connection.beginTransaction();
 
+    const requestedStatus = String(status || "").toLowerCase();
+    if (
+      requestedStatus &&
+      requestedStatus !== "completed" &&
+      !qcScoreMatchesStatus(qc_score, requestedStatus)
+    ) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: `QC score ${qc_score} cannot be saved as ${requestedStatus}. Use ${requiredStatusForQcScore(qc_score)}.`,
+      });
+    }
+
     let finalQCStatus = status === "regular" ? "completed" : qc_status || null;
 
     // 1. Generate and Upload Sample if records are provided
@@ -707,7 +722,7 @@ export const saveQCRecord = async (req: Request, res: Response) => {
     // 2. Check for existing record to support iterative rework for the SAME tracker
     console.log(`[QC Record] Checking for existing record with tracker_id: ${tracker_id}`);
     const checkExistingSql = `
-      SELECT id, qc_status FROM qc_records 
+      SELECT id, qc_status, qc_score, status FROM qc_records 
       WHERE tracker_id = ?
       LIMIT 1
     `;
@@ -741,11 +756,13 @@ export const saveQCRecord = async (req: Request, res: Response) => {
         updateFields.push('whole_file_path = ?');
         updateValues.push(whole_file_path);
       }
-      if (qc_score !== undefined && status !== "rework") {
+      // Never overwrite the first QC score/errors/status. Later Regular on
+      // rework/correction belongs on history rows only.
+      if (qc_score !== undefined && existingRows[0].qc_score == null) {
         updateFields.push('qc_score = ?');
         updateValues.push(qc_score);
       }
-      if (status !== undefined) {
+      if (status !== undefined && existingRows[0].status == null) {
         updateFields.push('status = ?');
         updateValues.push(status);
       }
@@ -761,7 +778,7 @@ export const saveQCRecord = async (req: Request, res: Response) => {
         updateFields.push('qc_generated_count = ?');
         updateValues.push(qc_generated_count);
       }
-      if (error_list !== undefined) {
+      if (error_list !== undefined && existingRows[0].qc_score == null) {
         updateFields.push('error_list = ?');
         updateValues.push(JSON.stringify(error_list));
       }

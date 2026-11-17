@@ -137,7 +137,7 @@ export class QCWorkflowService {
           null, // correction_file_qc_status (will be updated when agent uploads)
           nextCount,
           'correction',
-          null // correction_error_list (will be updated when QA reviews)
+          data.error_list ? JSON.stringify(data.error_list) : null,
         ]
       );
 
@@ -241,11 +241,15 @@ export class QCWorkflowService {
            rework_qc_score,
            rework_file_qc_status,
            rework_sample_file
-         ) VALUES (?, ?, NULL, ?, 'rework', NULL, NULL, NULL, NULL, NULL, ?)`,
+         ) VALUES (?, ?, NULL, ?, 'rework', ?, ?, ?, ?, NULL, ?)`,
         [
           qcId,
           data.whole_file_path, // The file the agent needs to fix next
           nextCount,
+          data.error_list ? JSON.stringify(data.error_list) : null,
+          data.file_record_count || 0,
+          data.qc_generated_count || 0,
+          data.qc_score ?? null,
           data.qc_file_path,     // The markup/sample QA just generated
         ]
       );
@@ -265,66 +269,36 @@ export class QCWorkflowService {
    */
   /**
    * QA reviewed one file type but the other type is still waiting.
-   * Close that leftover pending cycle so it leaves the rework/correction queue.
+   * Drop leftover pending rows. Do not stamp this QC's score onto them —
+   * that made 100% Regular/Correction look like a completed Rework.
    */
   static async closePendingCycle(
     connection: Connection,
     qcId: number,
     type: "rework" | "correction",
-    data: { error_list?: any[]; qc_score?: string | number }
+    _data?: { error_list?: any[]; qc_score?: string | number }
   ): Promise<void> {
     if (type === "rework") {
-      // Each placeholder and its value are pushed together so their order always matches.
-      const sets: string[] = [];
-      const params: any[] = [];
-      if (data.error_list !== undefined && data.error_list !== null) {
-        sets.push("rework_error_list = ?");
-        params.push(JSON.stringify(data.error_list));
-      }
-      if (data.qc_score !== undefined && data.qc_score !== null && data.qc_score !== "") {
-        sets.push("rework_qc_score = ?");
-        params.push(data.qc_score);
-      }
-      sets.push(
-        "rework_status = 'completed'",
-        "rework_file_qc_status = 'completed'",
-        "updated_at = CURRENT_TIMESTAMP",
-      );
-      params.push(qcId);
       const [result]: any = await connection.execute(
-        `UPDATE qc_rework_history
-         SET ${sets.join(", ")}
+        `DELETE FROM qc_rework_history
          WHERE qc_record_id = ?
-           AND rework_file_qc_status = 'pending'`,
-        params
+           AND (rework_file_qc_status IS NULL OR rework_file_qc_status = 'pending')`,
+        [qcId]
       );
       if (result?.affectedRows) {
-        console.log(`[QC Workflow] Closed ${result.affectedRows} pending rework cycle(s) for QC ID ${qcId}`);
+        console.log(`[QC Workflow] Abandoned ${result.affectedRows} leftover pending rework cycle(s) for QC ID ${qcId}`);
       }
       return;
     }
 
-    const sets: string[] = [];
-    const params: any[] = [];
-    if (data.error_list !== undefined && data.error_list !== null) {
-      sets.push("correction_error_list = ?");
-      params.push(JSON.stringify(data.error_list));
-    }
-    sets.push(
-      "correction_status = 'completed'",
-      "correction_file_qc_status = 'completed'",
-      "updated_at = CURRENT_TIMESTAMP",
-    );
-    params.push(qcId);
     const [result]: any = await connection.execute(
-      `UPDATE qc_correction_history
-       SET ${sets.join(", ")}
+      `DELETE FROM qc_correction_history
        WHERE qc_record_id = ?
-         AND correction_file_qc_status = 'pending'`,
-      params
+         AND (correction_file_qc_status IS NULL OR correction_file_qc_status = 'pending')`,
+      [qcId]
     );
     if (result?.affectedRows) {
-      console.log(`[QC Workflow] Closed ${result.affectedRows} pending correction cycle(s) for QC ID ${qcId}`);
+      console.log(`[QC Workflow] Abandoned ${result.affectedRows} leftover pending correction cycle(s) for QC ID ${qcId}`);
     }
   }
 
@@ -332,22 +306,37 @@ export class QCWorkflowService {
   static async syncQcRecordDecision(
     connection: Connection,
     qcId: number,
-    decision: { status: string; qcStatus: string; qcScore?: string | number | null; errorList?: any }
+    decision: {
+      status?: string;
+      qcStatus: string;
+      qcScore?: string | number | null;
+      errorList?: any;
+      preserveOriginalScore?: boolean;
+    }
   ): Promise<void> {
-    const sets = ["status = ?", "qc_status = ?", "updated_at = CURRENT_TIMESTAMP"];
-    const params: any[] = [decision.status, decision.qcStatus];
+    const sets = ["qc_status = ?", "updated_at = CURRENT_TIMESTAMP"];
+    const params: any[] = [decision.qcStatus];
 
-    // A later status-only save (marking correction completed) must not erase the first QC score.
+    // Later Regular on a rework/correction file must not replace the first QC score/errors.
+    if (!decision.preserveOriginalScore && decision.status) {
+      sets.push("status = ?");
+      params.push(decision.status);
+    }
+
     const hasScore =
       decision.qcScore !== undefined &&
       decision.qcScore !== null &&
       decision.qcScore !== "";
-    if (hasScore) {
+    if (!decision.preserveOriginalScore && hasScore) {
       sets.push("qc_score = ?");
       params.push(decision.qcScore);
     }
 
-    if (decision.errorList !== undefined && decision.errorList !== null) {
+    if (
+      !decision.preserveOriginalScore &&
+      decision.errorList !== undefined &&
+      decision.errorList !== null
+    ) {
       const errorList =
         typeof decision.errorList === "string"
           ? decision.errorList
