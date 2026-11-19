@@ -7,6 +7,7 @@ import { SMTP_HOST, SMTP_USER, SMTP_PASS } from "../config/env";
 
 interface QCEmailOptions {
   agent_email: string;
+  qa_email?: string;
   subject?: string;
   message?: string;
   status?: string;
@@ -14,7 +15,7 @@ interface QCEmailOptions {
 }
 
 export const sendQCEmailInternal = async (options: QCEmailOptions) => {
-  const { agent_email, subject, message, status, comments, ...templateData } = options;
+  const { agent_email, qa_email, subject, message, status, comments, ...templateData } = options;
   const finalMessage =
     typeof message === "string"
       ? message
@@ -44,13 +45,23 @@ export const sendQCEmailInternal = async (options: QCEmailOptions) => {
     html = `<p>${finalMessage || `QC review completed with status: ${status}`}</p>`;
   }
 
-  const mailOptions = {
+  const qaCc = String(qa_email || "").trim();
+  const cc =
+    qaCc && qaCc.toLowerCase() !== String(agent_email).trim().toLowerCase()
+      ? qaCc
+      : undefined;
+
+  const mailOptions: Record<string, any> = {
     from: `"${fromName}" <${accountEmail}>`,
     to: agent_email,
     subject: subject || `QC Notification: ${status || "Update"}`,
     text: finalMessage || `QC review completed with status: ${status}`,
     html,
   };
+  if (cc) {
+    mailOptions.cc = cc;
+    console.log(`[Email Service] CC QA who did this QC: ${cc}`);
+  }
 
   try {
     console.log(`[Email Service] Sending mail via SMTP...`);
@@ -93,6 +104,7 @@ export interface QcCompletionEmailPayload {
   project_id?: number | null;
   task_id?: number | null;
   qa_user_id?: number | null;
+  logged_in_user_id?: number | null;
   tracker_id?: number | null;
   status: string;
   qc_score?: any;
@@ -135,12 +147,13 @@ async function sendQcCompletionEmail(payload: QcCompletionEmailPayload): Promise
       }
     }
 
+    const scoredByUserId = payload.logged_in_user_id || payload.qa_user_id;
     const emailData = await getQCRecordEmailDetails(
       connection,
       agentId as number,
       projectId as number,
       taskId as number,
-      payload.qa_user_id as number,
+      scoredByUserId as number,
       trackerId,
     );
 
@@ -154,6 +167,7 @@ async function sendQcCompletionEmail(payload: QcCompletionEmailPayload): Promise
     const errors = parseErrorList(payload.error_list);
     await sendQCEmailInternal({
       agent_email: emailData.agent_email,
+      qa_email: emailData.qa_email,
       agent_name: emailData.agent_name,
       status: payload.status,
       project_name: emailData.project_name,
