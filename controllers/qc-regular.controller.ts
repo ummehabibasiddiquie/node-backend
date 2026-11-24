@@ -60,6 +60,7 @@ export const saveRegularQC = async (req: Request, res: Response) => {
 
     // Ensure all values are properly handled (undefined -> null)
     const safeParams = {
+      logged_in_user_id: logged_in_user_id || null,
       assistant_manager_id: assistant_manager_id || null,
       qa_user_id: qa_user_id || null,
       agent_id: agent_id || null,
@@ -163,6 +164,7 @@ export const saveRegularQC = async (req: Request, res: Response) => {
           project_id: safeParams.project_id,
           task_id: safeParams.task_id,
           qa_user_id: safeParams.qa_user_id,
+          logged_in_user_id: safeParams.logged_in_user_id,
           tracker_id: safeParams.tracker_id,
           status: "regular",
           qc_score: safeParams.qc_score,
@@ -262,6 +264,7 @@ export const saveRegularQC = async (req: Request, res: Response) => {
           project_id: safeParams.project_id,
           task_id: safeParams.task_id,
           qa_user_id: safeParams.qa_user_id,
+          logged_in_user_id: safeParams.logged_in_user_id,
           tracker_id: safeParams.tracker_id,
           status: "correction",
           qc_score: qcScore,
@@ -371,6 +374,7 @@ export const saveRegularQC = async (req: Request, res: Response) => {
       project_id: safeParams.project_id,
       task_id: safeParams.task_id,
       qa_user_id: safeParams.qa_user_id,
+      logged_in_user_id: safeParams.logged_in_user_id,
       tracker_id: safeParams.tracker_id,
       status: "regular",
       qc_score: safeParams.qc_score,

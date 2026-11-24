@@ -455,6 +455,7 @@ export async function getQCRecordEmailDetails(
     let projectName = "N/A";
     let taskName = "N/A";
     let qaName = "QA Department";
+    let qaEmail = "";
 
     if (projectId != null) {
       const [projectRows]: any = await connection.execute(
@@ -472,10 +473,11 @@ export async function getQCRecordEmailDetails(
     }
     if (qaId != null) {
       const [qaRows]: any = await connection.execute(
-        "SELECT user_name FROM tfs_user WHERE user_id = ?",
+        "SELECT user_name, user_email FROM tfs_user WHERE user_id = ?",
         [qaId]
       );
       qaName = qaRows[0]?.user_name || "QA Department";
+      qaEmail = rowEmail(qaRows[0]);
     }
 
     if (!agentEmail) {
@@ -491,6 +493,7 @@ export async function getQCRecordEmailDetails(
       project_name: projectName,
       task_name: taskName,
       qa_name: qaName,
+      qa_email: qaEmail,
     };
   } catch (err) {
     console.error("[QC Helper] Error fetching email details:", err);

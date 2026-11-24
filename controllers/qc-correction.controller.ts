@@ -191,6 +191,7 @@ export const saveCorrectionQC = async (req: Request, res: Response) => {
       project_id,
       task_id,
       qa_user_id,
+      logged_in_user_id,
       tracker_id,
       status: "correction",
       qc_score: qcScore,

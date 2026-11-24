@@ -46,21 +46,24 @@ export const sendQCEmailInternal = async (options: QCEmailOptions) => {
   }
 
   const qaCc = String(qa_email || "").trim();
+  const agentTo = String(agent_email).trim();
   const cc =
-    qaCc && qaCc.toLowerCase() !== String(agent_email).trim().toLowerCase()
-      ? qaCc
-      : undefined;
+    qaCc && qaCc.toLowerCase() !== agentTo.toLowerCase() ? qaCc : undefined;
 
   const mailOptions: Record<string, any> = {
     from: `"${fromName}" <${accountEmail}>`,
-    to: agent_email,
+    to: agentTo,
     subject: subject || `QC Notification: ${status || "Update"}`,
     text: finalMessage || `QC review completed with status: ${status}`,
     html,
   };
   if (cc) {
-    mailOptions.cc = cc;
-    console.log(`[Email Service] CC QA who did this QC: ${cc}`);
+    mailOptions.cc = [cc];
+    console.log(`[Email Service] CC person who filled the QC form: ${cc}`);
+  } else {
+    console.warn(
+      `[Email Service] No CC — qa_email missing or same as agent (${qaCc || "empty"})`,
+    );
   }
 
   try {
