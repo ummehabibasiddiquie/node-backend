@@ -4,6 +4,7 @@ import { generateReworkEmailHtml } from "../constants/email-temp";
 import { get_db_connection } from "../database/db";
 import { getQCRecordEmailDetails } from "../utils/qc-helpers";
 import { SMTP_HOST, SMTP_USER, SMTP_PASS } from "../config/env";
+import { applyTestMailNotice } from "../utils/test-mail";
 
 interface QCEmailOptions {
   agent_email: string;
@@ -50,12 +51,17 @@ export const sendQCEmailInternal = async (options: QCEmailOptions) => {
   const cc =
     qaCc && qaCc.toLowerCase() !== agentTo.toLowerCase() ? qaCc : undefined;
 
-  const mailOptions: Record<string, any> = {
-    from: `"${fromName}" <${accountEmail}>`,
-    to: agentTo,
+  const noticed = applyTestMailNotice({
     subject: subject || `QC Notification: ${status || "Update"}`,
     text: finalMessage || `QC review completed with status: ${status}`,
     html,
+  });
+  const mailOptions: Record<string, any> = {
+    from: `"${fromName}" <${accountEmail}>`,
+    to: agentTo,
+    subject: noticed.subject,
+    text: noticed.text,
+    html: noticed.html,
   };
   if (cc) {
     mailOptions.cc = [cc];

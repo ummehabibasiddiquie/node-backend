@@ -1,6 +1,7 @@
 import { emailTemplates } from './email-template'
 import dayjs from 'dayjs'
 import transporter, { accountEmail } from '../config/nodemailer'
+import { applyTestMailNotice } from './test-mail'
 
 export const sendReminderEmail = async ({ to, type, subscription }: EmailProps) => {
   if(!to || !type) throw new Error('Missing required parameters');
@@ -21,11 +22,12 @@ export const sendReminderEmail = async ({ to, type, subscription }: EmailProps) 
   const message = template.generateBody(mailInfo);
   const subject = template.generateSubject(mailInfo);
 
+  const noticed = applyTestMailNotice({ subject, html: message })
   const mailOptions = {
     from: accountEmail,
     to: to,
-    subject: subject,
-    html: message,
+    subject: noticed.subject,
+    html: noticed.html,
   }
 
   transporter.sendMail(mailOptions, (error, info) => {
