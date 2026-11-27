@@ -28,7 +28,8 @@ export const generateReworkEmailHtml = (data: ReworkEmailData): string => {
   const normalizedStatus = (status || "").toLowerCase();
   const isRework = normalizedStatus === "rework";
   const isCorrection = normalizedStatus === "correction";
-  const isRegular = normalizedStatus === "regular";
+  const isRegular =
+    normalizedStatus === "regular" || normalizedStatus === "completed";
 
   // Dynamic Theme Colors
   let headerColor = "#2563eb"; // Default Blue
@@ -54,7 +55,10 @@ export const generateReworkEmailHtml = (data: ReworkEmailData): string => {
     boxBgColor = "#f0fdf4";
     boxBorderColor = "#bbf7d0";
     accentColor = "#166534";
-    statusText = "✅ QC Approved (Regular)";
+    statusText =
+      normalizedStatus === "completed"
+        ? "✅ QC Completed"
+        : "✅ QC Approved (Regular)";
   }
 
   const hasErrors =

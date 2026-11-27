@@ -147,7 +147,7 @@ export const saveCorrectionQC = async (req: Request, res: Response) => {
     );
 
     await QCWorkflowService.syncQcRecordDecision(connection, qcId, {
-      status: "correction",
+      status: markCompleted ? "regular" : "correction",
       qcStatus: markCompleted ? "completed" : finalQCStatus,
       qcScore: qc_score,
       errorList: error_list,
@@ -186,6 +186,8 @@ export const saveCorrectionQC = async (req: Request, res: Response) => {
     );
     const qcScore = qcRecordRows.length > 0 ? qcRecordRows[0].qc_score : qc_score;
 
+    // Marking a correction cycle Completed must send the green completed/regular
+    // mail — not another "ACTION REQUIRED: Correction" email.
     dispatchQcCompletionEmail({
       agent_id,
       project_id,
@@ -193,9 +195,9 @@ export const saveCorrectionQC = async (req: Request, res: Response) => {
       qa_user_id,
       logged_in_user_id,
       tracker_id,
-      status: "correction",
+      status: markCompleted ? "regular" : "correction",
       qc_score: qcScore,
-      error_list,
+      error_list: markCompleted ? [] : error_list,
       comments,
       file_path: sampleFilePath,
       submission_time: date_of_file_submission || correctionCreatedAt,
